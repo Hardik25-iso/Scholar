@@ -1,0 +1,18 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Data (FAISS indexes, per-user stores, SQLite DB) — never commit
+data/
+
+# Secrets — never commit
+.env
+
+# Node / frontend
+node_modules/
+frontend/dist/
+
+# OS / editor
+.DS_Store
+Thumbs.db

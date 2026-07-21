@@ -1,0 +1,69 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ——— base ——— */
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  /* Atkinson Hyperlegible is the default UI/body face; serif is opt-in per element. */
+  font-family: "Atkinson Hyperlegible", system-ui, sans-serif;
+  /* E-Ink / Paper key effect: a faint grain so the "page" isn't a flat fill.
+     Inline SVG fractal noise — no asset request, sits under all content. */
+  background-color: #f7f5f0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.028'/%3E%3C/svg%3E");
+}
+
+::selection {
+  background: #f3e4e0; /* accentSoft */
+  color: #a63a2b; /* accent */
+}
+
+/* Visible focus ring for keyboard nav (checklist: focus states must be visible).
+   :focus-visible only shows it for keyboard, not mouse clicks. */
+:focus-visible {
+  outline: 2px solid #a63a2b;
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ——— entrance animation for answers/sources ——— */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.rise {
+  animation: rise 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* ——— thinking indicator: three ticking marks ——— */
+@keyframes tick {
+  0%, 100% { opacity: 0.15; }
+  50% { opacity: 1; }
+}
+.tick > span {
+  animation: tick 1.2s ease-in-out infinite;
+}
+.tick > span:nth-child(2) { animation-delay: 0.2s; }
+.tick > span:nth-child(3) { animation-delay: 0.4s; }
+
+/* Accessibility: honor users who ask the OS to reduce motion (checklist item). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

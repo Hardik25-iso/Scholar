@@ -13,6 +13,7 @@ from the library cache rather than a single global.
 Run:  uvicorn backend.api:app --reload   (use the .venv interpreter)
 """
 import json
+import threading
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, status
@@ -24,8 +25,9 @@ from backend.auth import get_current_user, router as auth_router
 from backend.config import settings
 from backend.db import init_db
 from backend.db_models import User
-from backend.generator import generate, stream_answer
-from backend.models import Answer, AskRequest
+from backend.embedder import embed
+from backend.generator import generate, stream_answer, warm_llm
+from backend.models import Answer, AskRequest, Citation
 from backend.papers import router as papers_router
 from backend.reranker import Reranker
 
@@ -35,10 +37,30 @@ from backend.reranker import Reranker
 _reranker = Reranker()
 
 
+def _warm_models() -> None:
+    """Preload the three models so the first request is fast, not cold.
+
+    Runs in a background thread (see lifespan) so the server is ready to accept
+    requests immediately while the models load. Non-fatal: if Ollama is down we
+    log and move on rather than taking the whole app with us.
+    """
+    try:
+        embed(["warm up the embedder"], progress=False)          # mpnet
+        _reranker.rerank("warm up", [                            # cross-encoder
+            Citation(paper_id="_", page=0, chunk_index=0, score=0.0, text="warm up passage")
+        ], top_k=1)
+        warm_llm()                                               # Ollama gemma3:4b
+        print("[warm] models ready", flush=True)
+    except Exception as exc:  # e.g. Ollama not running
+        print(f"[warm] skipped (non-fatal): {exc}", flush=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: create DB tables. RAG models load lazily on first use.
+    # Startup: create DB tables, then warm models in the background so startup
+    # stays instant while the first-request cold-load happens ahead of time.
     init_db()
+    threading.Thread(target=_warm_models, name="warm", daemon=True).start()
     yield
 
 

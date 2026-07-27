@@ -61,6 +61,16 @@ def _messages(question: str, citations: list[Citation]) -> list[dict[str, str]]:
     ]
 
 
+def warm_llm() -> None:
+    """Trigger Ollama to load the model into memory now, so the first real
+    answer doesn't pay the ~30s+ cold-load. A 1-token generation is enough."""
+    ollama.chat(
+        model=MODEL,
+        messages=[{"role": "user", "content": "hi"}],
+        options={"num_predict": 1},
+    )
+
+
 def stream_answer(question: str, citations: list[Citation]) -> Iterator[str]:
     """Yield the grounded answer as incremental text deltas, as the LLM writes.
 

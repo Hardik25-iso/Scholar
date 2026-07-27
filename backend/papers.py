@@ -8,6 +8,7 @@ user_id and delete verifies ownership before touching anything.
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 
 from backend import library
@@ -89,6 +90,27 @@ def list_papers(
     return session.exec(
         select(Paper).where(Paper.user_id == user.id).order_by(Paper.created_at.desc())
     ).all()
+
+
+@router.get("/{paper_id}/file")
+def get_paper_file(
+    paper_id: int,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> FileResponse:
+    """Serve a user's stored PDF inline (for the in-app source viewer).
+
+    Ownership-checked like every library route. Served inline (not as a download)
+    so the browser renders it in an iframe; the viewer appends #page=N to jump
+    to a cited page. Auth is the same-site cookie — no CSRF needed on a GET.
+    """
+    paper = session.get(Paper, paper_id)
+    if paper is None or paper.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "paper not found")
+    path = library.user_papers_dir(user.id) / f"{paper.paper_id}.pdf"
+    if not path.exists():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "file no longer on disk")
+    return FileResponse(path, media_type="application/pdf", content_disposition_type="inline")
 
 
 @router.delete("/{paper_id}", status_code=status.HTTP_204_NO_CONTENT,

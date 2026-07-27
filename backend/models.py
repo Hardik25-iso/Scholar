@@ -1,4 +1,6 @@
-from pydantic import BaseModel
+from datetime import datetime
+
+from pydantic import BaseModel, EmailStr, field_validator
 
 
 class Chunk(BaseModel):
@@ -54,3 +56,47 @@ class AskRequest(BaseModel):
     question: str
     k: int = 5
     candidates: int = 20
+
+
+# ——— Auth boundary models ———
+
+class RegisterRequest(BaseModel):
+    """Sign-up payload. EmailStr validates format; password rules enforced below."""
+    email: EmailStr
+    password: str
+
+    @field_validator("password")
+    @classmethod
+    def password_rules(cls, v: str) -> str:
+        # Min length 8 (NIST SP 800-63B) — no forced composition rules.
+        if len(v) < 8:
+            raise ValueError("password must be at least 8 characters")
+        # bcrypt truncates silently past 72 BYTES (not chars) — reject loudly so
+        # long/multibyte passwords can never be quietly cut. Same failure
+        # philosophy as the chunker's 384-token guard.
+        if len(v.encode("utf-8")) > 72:
+            raise ValueError("password must be at most 72 bytes")
+        return v
+
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class UserPublic(BaseModel):
+    """A user as exposed over the wire — never includes the password hash."""
+    id: int
+    email: EmailStr
+
+
+# ——— Library boundary models ———
+
+class PaperPublic(BaseModel):
+    """A paper as exposed over the wire (the library catalogue entry)."""
+    id: int
+    paper_id: str
+    title: str
+    filename: str
+    n_chunks: int
+    created_at: datetime

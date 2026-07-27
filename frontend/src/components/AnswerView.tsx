@@ -4,13 +4,14 @@ interface Props {
   answer: Answer;
   activeCitation: number | null; // 1-based citation number, or null
   onCite: (n: number | null) => void;
+  streaming?: boolean;           // show a live caret while tokens arrive
 }
 
 /**
  * Renders the answer text, turning every [n] marker the LLM produced into an
  * interactive superscript that highlights the matching source card.
  */
-export default function AnswerView({ answer, activeCitation, onCite }: Props) {
+export default function AnswerView({ answer, activeCitation, onCite, streaming }: Props) {
   // Split on [n] markers, keeping them: "text [2] more" -> ["text ", "[2]", " more"]
   const parts = answer.answer.split(/(\[\d+\])/g);
 
@@ -43,6 +44,10 @@ export default function AnswerView({ answer, activeCitation, onCite }: Props) {
             </sup>
           );
         })}
+        {/* live caret while streaming (also covers the gap before the first token) */}
+        {streaming && (
+          <span className="ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-[0.15em] animate-pulse bg-accent" />
+        )}
       </p>
     </div>
   );

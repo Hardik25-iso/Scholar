@@ -1,52 +1,62 @@
-"""FastAPI surface for Scholar — the same RAG pipeline, over HTTP.
+"""FastAPI surface for Scholar — the RAG pipeline + auth + library, over HTTP.
 
-    POST /ask     {question, k?, candidates?} -> Answer (grounded + citations)
-    GET  /health  -> {"status": "ok"}
+    POST /ask          {question, k?, candidates?} -> Answer  (auth; scoped to
+                       the caller's own papers)
+    /auth/*            register / login / logout / me         (see auth.py)
+    /papers            upload / list / delete                 (see papers.py)
+    GET  /health       -> {"status": "ok"}
 
-The retriever and reranker are loaded ONCE at startup (they pull FAISS + two
-Transformer models into memory) and reused for every request — see the lifespan
-handler. Loading them per request would add ~1-2s of model-loading to every call.
+The reranker model is loaded once and shared (stateless). The retriever is now
+PER USER — each account has its own FAISS index — so it is resolved per request
+from the library cache rather than a single global.
 
-Run:  uvicorn backend.api:app --reload
+Run:  uvicorn backend.api:app --reload   (use the .venv interpreter)
 """
+import json
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
-from backend.generator import generate
+from backend import library
+from backend.auth import get_current_user, router as auth_router
 from backend.config import settings
 from backend.db import init_db
+from backend.db_models import User
+from backend.generator import generate, stream_answer
 from backend.models import Answer, AskRequest
+from backend.papers import router as papers_router
 from backend.reranker import Reranker
-from backend.retriever import Retriever
 
-# Filled in by the lifespan handler at startup; reused across all requests.
-_pipeline: dict[str, object] = {}
+# The reranker model is heavy and stateless, so load it once and share it. The
+# retriever is now PER USER (each user has their own index), so it is resolved
+# per request from the library cache rather than being a single global.
+_reranker = Reranker()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: create DB tables, then load the heavy RAG objects once.
+    # Startup: create DB tables. RAG models load lazily on first use.
     init_db()
-    _pipeline["retriever"] = Retriever()
-    _pipeline["reranker"] = Reranker()
     yield
-    # Shutdown: nothing to clean up (in-process, no connections).
-    _pipeline.clear()
 
 
 app = FastAPI(title="Scholar RAG API", lifespan=lifespan)
 
-# CORS: the Vite frontend is a browser app on a different origin, so the request
-# is blocked without this. Explicit origin from config (never "*") — required now
-# and mandatory once cookie auth (allow_credentials) lands in Slice B.
+# CORS: the Vite frontend is a browser app on a different origin. allow_credentials
+# is required so the browser sends/receives the auth cookie cross-origin — and it
+# is INCOMPATIBLE with allow_origins="*", so the origin must stay explicit.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.frontend_origin, "http://127.0.0.1:5173"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(auth_router)
+app.include_router(papers_router)
 
 
 @app.get("/health")
@@ -56,12 +66,52 @@ def health() -> dict[str, str]:
 
 # Plain `def` (not async): generate() calls a blocking LLM. FastAPI runs sync
 # endpoints in a threadpool, so a slow answer doesn't block other requests.
+# Auth-protected and scoped: a user can only ever query their OWN papers.
 @app.post("/ask", response_model=Answer)
-def ask(request: AskRequest) -> Answer:
-    retriever: Retriever = _pipeline["retriever"]      # type: ignore[assignment]
-    reranker: Reranker = _pipeline["reranker"]         # type: ignore[assignment]
+def ask(request: AskRequest, user: User = Depends(get_current_user)) -> Answer:
+    retriever = library.get_retriever(user.id)
+    if retriever is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "no papers indexed yet — upload a PDF first",
+        )
 
     # Stage 1: wide net.  Stage 2: rerank to the top k.  Stage 3: grounded answer.
     candidates = retriever.retrieve(request.question, k=request.candidates)
-    citations = reranker.rerank(request.question, candidates, top_k=request.k)
+    citations = _reranker.rerank(request.question, candidates, top_k=request.k)
     return generate(request.question, citations)
+
+
+def _retrieve_scoped(user_id: int, request: AskRequest):
+    """Shared stage 1+2 for the ask endpoints; raises 400 if the user has no papers."""
+    retriever = library.get_retriever(user_id)
+    if retriever is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "no papers indexed yet — upload a PDF first",
+        )
+    candidates = retriever.retrieve(request.question, k=request.candidates)
+    return _reranker.rerank(request.question, candidates, top_k=request.k)
+
+
+# Streaming variant of /ask. Retrieval + reranking run up front, so we can send
+# the citations immediately, then stream the answer token-by-token as the local
+# LLM writes it — instead of the client staring at a blank screen for ~20s.
+# Transport is NDJSON (one JSON object per line): a citations line, then token
+# lines, then a done line (or an error line if generation fails mid-stream).
+# Sync `def` so Starlette iterates the blocking Ollama generator in a threadpool.
+@app.post("/ask/stream")
+def ask_stream(request: AskRequest, user: User = Depends(get_current_user)) -> StreamingResponse:
+    citations = _retrieve_scoped(user.id, request)
+
+    def ndjson():
+        yield json.dumps({"type": "citations",
+                          "citations": [c.model_dump() for c in citations]}) + "\n"
+        try:
+            for delta in stream_answer(request.question, citations):
+                yield json.dumps({"type": "token", "text": delta}) + "\n"
+            yield json.dumps({"type": "done"}) + "\n"
+        except Exception as exc:  # surface a mid-stream failure to the client
+            yield json.dumps({"type": "error", "detail": str(exc)}) + "\n"
+
+    return StreamingResponse(ndjson(), media_type="application/x-ndjson")

@@ -8,6 +8,8 @@ system that can only speak from the papers, and cite where each claim came from.
 The LLM is Gemma 3 4B, running locally via Ollama (no API cost, on-device).
 Swapping models later means changing MODEL below — nothing else in the app.
 """
+from collections.abc import Iterator
+
 import ollama
 
 from backend.models import Answer, Citation
@@ -39,20 +41,40 @@ def _format_sources(citations: list[Citation]) -> str:
 
 def generate(question: str, citations: list[Citation]) -> Answer:
     """Ask the local LLM to answer `question` grounded in `citations`."""
-    user_message = (
-        f"Sources:\n\n{_format_sources(citations)}\n\n"
-        f"Question: {question}"
-    )
-
     response = ollama.chat(
         model=MODEL,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_message},
-        ],
+        messages=_messages(question, citations),
         # temperature 0 => deterministic, faithful answers (no creative drift).
         options={"temperature": 0.0},
     )
 
     answer_text = response["message"]["content"].strip()
     return Answer(question=question, answer=answer_text, citations=citations)
+
+
+def _messages(question: str, citations: list[Citation]) -> list[dict[str, str]]:
+    """The system + user turns shared by the batch and streaming paths."""
+    user_message = f"Sources:\n\n{_format_sources(citations)}\n\nQuestion: {question}"
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_message},
+    ]
+
+
+def stream_answer(question: str, citations: list[Citation]) -> Iterator[str]:
+    """Yield the grounded answer as incremental text deltas, as the LLM writes.
+
+    Same prompt and grounding contract as generate(); only the transport differs
+    (token-by-token instead of one blocking blob). The caller already holds the
+    citations, so it can show sources immediately and stream the prose on top.
+    """
+    stream = ollama.chat(
+        model=MODEL,
+        messages=_messages(question, citations),
+        options={"temperature": 0.0},
+        stream=True,
+    )
+    for part in stream:
+        delta = part["message"]["content"]
+        if delta:
+            yield delta

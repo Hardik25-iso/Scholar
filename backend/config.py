@@ -23,5 +23,19 @@ class Settings(BaseSettings):
     # The browser origin allowed to call this API (the Vite dev server).
     frontend_origin: str = "http://localhost:5173"
 
+    # JWT signing secret. REQUIRED — no default on purpose: a fallback like
+    # "changeme" would silently "work" in dev and ship forgeable tokens. With no
+    # default, a missing SECRET_KEY makes the app fail loudly at startup.
+    secret_key: str
+
+    # Access-token lifetime. Short by design; no refresh tokens yet.
+    access_token_expire_minutes: int = 30
+
+    # Cookie flags. In local dev over http://localhost, SameSite=Lax works
+    # without Secure (localhost is treated as same-site + a secure context).
+    # Set cookie_secure=True (and SameSite=None) once served over HTTPS.
+    cookie_secure: bool = False
+    cookie_samesite: str = "lax"
+
 
 settings = Settings()

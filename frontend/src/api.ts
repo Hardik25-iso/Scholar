@@ -134,6 +134,15 @@ export async function askStream(question: string, h: StreamHandlers): Promise<vo
 export function listPapers(): Promise<Paper[]> {
   return request<Paper[]>("/papers");
 }
+/**
+ * URL of a paper's stored PDF, for the in-app viewer's <iframe>. The auth
+ * cookie is same-site (localhost:5173 -> localhost:8001 differ only by port, so
+ * SameSite=Lax still sends it), so the iframe request is authenticated without
+ * any extra work. Append "#page=N" to jump to a cited page.
+ */
+export function paperFileUrl(id: number): string {
+  return `${API_BASE}/papers/${id}/file`;
+}
 export function deletePaper(id: number): Promise<void> {
   return request<void>(`/papers/${id}`, { method: "DELETE" });
 }

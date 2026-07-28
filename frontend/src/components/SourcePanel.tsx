@@ -5,6 +5,7 @@ interface Props {
   citations: Citation[];
   activeCitation: number | null; // 1-based
   onCite: (n: number | null) => void;
+  onOpen?: (citation: Citation) => void; // open this source in the PDF viewer
 }
 
 /** Relevance drawn as a thin tick bar — rerank logits roughly span -4..+8. */
@@ -21,7 +22,7 @@ function ScoreBar({ value }: { value: number }) {
 }
 
 /** Right pane: the exact passages behind the current answer. */
-export default function SourcePanel({ citations, activeCitation, onCite }: Props) {
+export default function SourcePanel({ citations, activeCitation, onCite, onOpen }: Props) {
   const refs = useRef<(HTMLDivElement | null)[]>([]);
 
   // When a citation marker is clicked in the answer, scroll its card into view.
@@ -54,9 +55,10 @@ export default function SourcePanel({ citations, activeCitation, onCite }: Props
             ref={(el) => (refs.current[i] = el)}
             onMouseEnter={() => onCite(n)}
             onMouseLeave={() => onCite(null)}
-            className={`rise cursor-default border bg-panel p-4 transition-colors duration-200 ${
-              active ? "border-accent/60" : "border-line"
-            }`}
+            onClick={() => onOpen?.(c)}
+            className={`rise border bg-panel p-4 transition-colors duration-200 ${
+              onOpen ? "cursor-pointer" : "cursor-default"
+            } ${active ? "border-accent/60" : "border-line"}`}
             style={{ animationDelay: `${i * 60}ms` }}
           >
             <div className="mb-2 flex items-baseline justify-between gap-2">
@@ -68,7 +70,7 @@ export default function SourcePanel({ citations, activeCitation, onCite }: Props
                 [{n}] {c.paper_id.replace(/_/g, " ")}
               </span>
               <span className="shrink-0 font-mono text-[0.65rem] text-faint">
-                p.{c.page + 1}
+                p.{c.page + 1}{onOpen && <span className="ml-1 text-accent">↗</span>}
               </span>
             </div>
             <p className="mb-3 line-clamp-5 text-[0.8rem] leading-relaxed text-graphite">

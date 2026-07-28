@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { askStream, deletePaper, listPapers, uploadPaper, type Answer, type Paper } from "../api";
+import { askStream, deletePaper, listPapers, uploadPaper, type Answer, type Citation, type Paper } from "../api";
 import { useAuth } from "../auth/AuthContext";
 import AnswerView from "../components/AnswerView";
 import Library from "../components/Library";
+import PdfViewer, { type ViewerTarget } from "../components/PdfViewer";
 import QueryBar from "../components/QueryBar";
 import SourcePanel from "../components/SourcePanel";
 
@@ -33,7 +34,15 @@ export default function Workspace() {
   const [exchanges, setExchanges] = useState<Exchange[]>([]);
   const [busy, setBusy] = useState(false);
   const [activeCitation, setActiveCitation] = useState<number | null>(null);
+  const [viewer, setViewer] = useState<ViewerTarget | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // Open a citation in the PDF viewer: map its paper_id slug -> the Paper row
+  // (the file endpoint keys on the DB id). If the paper was deleted, do nothing.
+  const openSource = (c: Citation) => {
+    const paper = papers.find((p) => p.paper_id === c.paper_id);
+    if (paper) setViewer({ paperDbId: paper.id, title: paper.title, page: c.page });
+  };
 
   const latestAnswer = [...exchanges].reverse().find((e) => e.answer)?.answer;
   const hasPapers = papers.length > 0;
@@ -213,9 +222,12 @@ export default function Workspace() {
             citations={latestAnswer?.citations ?? []}
             activeCitation={activeCitation}
             onCite={setActiveCitation}
+            onOpen={openSource}
           />
         </aside>
       </div>
+
+      {viewer && <PdfViewer target={viewer} onClose={() => setViewer(null)} />}
     </div>
   );
 }

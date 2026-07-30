@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import type { Paper } from "../api";
+import { FileIcon, TrashIcon, UploadIcon } from "./icons";
 
 interface Props {
   papers: Paper[];
@@ -25,58 +26,86 @@ export default function Library({ papers, loading, uploading, error, onUpload, o
   };
 
   return (
-    <aside className="hidden w-[17rem] shrink-0 flex-col border-r border-line bg-panel/40 md:flex">
-      <div className="flex items-baseline justify-between border-b border-line px-5 py-3">
-        <span className="font-mono text-[0.62rem] uppercase tracking-[0.18em] text-faint">
-          library
+    <aside className="hidden w-[264px] shrink-0 flex-col overflow-y-auto border-r border-line
+                      bg-gradient-to-b from-panel/60 to-paper/20 md:flex">
+      <div className="sticky top-0 z-10 flex items-center justify-between border-b border-line
+                      bg-paper px-[1.15rem] py-[0.85rem]">
+        <span className="flex items-center gap-[0.45rem] text-faint">
+          <FileIcon className="h-[0.9rem] w-[0.9rem]" />
+          <span className="font-mono text-[0.62rem] uppercase tracking-[0.18em]">Library</span>
         </span>
-        <span className="font-mono text-[0.62rem] text-faint">{papers.length}</span>
+        <span className="rounded-full border border-line bg-panel px-[0.45rem] py-[0.05rem]
+                         font-mono text-[0.6rem] text-graphite">
+          {papers.length}
+        </span>
       </div>
 
-      {/* upload */}
-      <div className="border-b border-line p-4">
-        <input ref={fileRef} type="file" accept="application/pdf,.pdf" hidden onChange={onFile} />
-        <button
-          onClick={pick}
-          disabled={uploading}
-          className="w-full cursor-pointer border border-dashed border-line px-3 py-4 text-center
-                     font-mono text-[0.7rem] uppercase tracking-[0.14em] text-graphite
-                     transition-colors duration-200 hover:border-accent/50 hover:text-accent
-                     disabled:cursor-wait disabled:opacity-60"
-        >
-          {uploading ? "indexing paper…" : "+ upload pdf"}
-        </button>
-        {error && <p className="mt-2 font-mono text-[0.62rem] leading-relaxed text-accent">{error}</p>}
-      </div>
+      {/* upload dropzone */}
+      <input ref={fileRef} type="file" accept="application/pdf,.pdf" hidden onChange={onFile} />
+      <button
+        onClick={pick}
+        disabled={uploading}
+        className="group mx-4 mt-[0.9rem] cursor-pointer rounded-[10px] border-[1.5px] border-dashed
+                   border-line bg-panel px-4 py-5 text-center text-graphite transition-all duration-200
+                   hover:border-accent/50 hover:bg-[#FDF6F4] hover:text-accentInk hover:shadow-e1
+                   disabled:cursor-wait disabled:opacity-70"
+      >
+        <UploadIcon className="mx-auto mb-2 h-[1.6rem] w-[1.6rem] text-accent" />
+        <b className="block font-sans text-[0.82rem] font-semibold">Drop a PDF to add it</b>
+        <span className="mt-0.5 block font-mono text-[0.6rem] tracking-[0.04em] text-faint">
+          or click to browse · max 20 MB
+        </span>
+      </button>
+      {error && <p className="mx-4 mt-2 font-mono text-[0.62rem] leading-relaxed text-accent">{error}</p>}
 
-      {/* list */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+      {/* paper cards */}
+      <div className="flex min-h-0 flex-1 flex-col gap-[0.55rem] px-[0.8rem] pb-4 pt-3">
+        {uploading && (
+          <div className="flex gap-[0.7rem] rounded-[10px] border border-lineSoft bg-raised p-[0.7rem] px-3 shadow-e1">
+            <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[7px] bg-accentSoft text-accent">
+              <FileIcon className="h-[1.05rem] w-[1.05rem]" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="font-mono text-[0.7rem] text-accent">indexing…</p>
+              <div className="mt-[0.4rem] h-[3px] overflow-hidden rounded-sm bg-line">
+                <span className="block h-full w-3/5 animate-pulse rounded-sm bg-gradient-to-r from-accent to-[#C7614F]" />
+              </div>
+            </div>
+          </div>
+        )}
+
         {loading ? (
           <p className="px-3 py-3 font-mono text-[0.62rem] text-faint">loading…</p>
-        ) : papers.length === 0 ? (
+        ) : papers.length === 0 && !uploading ? (
           <p className="px-3 py-3 font-mono text-[0.62rem] leading-relaxed text-faint">
             No papers yet. Upload a PDF to start asking grounded questions.
           </p>
         ) : (
-          papers.map((p) => (
+          papers.map((p, i) => (
             <div
               key={p.id}
-              className="group flex items-start justify-between gap-2 rounded px-3 py-2
-                         transition-colors duration-150 hover:bg-paper"
+              className="rise group relative flex cursor-pointer gap-[0.7rem] rounded-[10px] border
+                         border-lineSoft bg-raised p-[0.7rem] px-3 shadow-e1 transition-all duration-200
+                         hover:-translate-y-0.5 hover:border-line hover:shadow-e2"
+              style={{ animationDelay: `${i * 50}ms` }}
             >
-              <div className="min-w-0">
-                <p className="truncate font-serif text-[0.9rem] leading-snug text-ink" title={p.title}>
+              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[7px] bg-accentSoft text-accent">
+                <FileIcon className="h-[1.05rem] w-[1.05rem]" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-serif text-[0.94rem] leading-tight text-ink" title={p.title}>
                   {p.title.replace(/_/g, " ")}
                 </p>
-                <p className="mt-0.5 font-mono text-[0.6rem] text-faint">{p.n_chunks} chunks</p>
+                <p className="mt-1 font-mono text-[0.6rem] text-faint">{p.n_chunks} chunks</p>
               </div>
               <button
                 onClick={() => onDelete(p.id)}
                 title="Remove paper"
-                className="shrink-0 cursor-pointer font-mono text-[0.7rem] text-faint opacity-0
+                aria-label={`Remove ${p.title}`}
+                className="absolute right-2 top-2 cursor-pointer text-faint opacity-0
                            transition-opacity duration-150 hover:text-accent group-hover:opacity-100"
               >
-                ✕
+                <TrashIcon className="h-[0.85rem] w-[0.85rem]" />
               </button>
             </div>
           ))

@@ -16,39 +16,37 @@ export default function AnswerView({ answer, activeCitation, onCite, streaming }
   const parts = answer.answer.split(/(\[\d+\])/g);
 
   return (
-    <div className="rise">
-      <p className="font-serif text-[1.2rem] leading-[1.85] text-ink">
-        {parts.map((part, i) => {
-          const m = part.match(/^\[(\d+)\]$/);
-          if (!m) return <span key={i}>{part}</span>;
+    <p className="font-serif text-[1.12rem] leading-[1.85] text-ink">
+      {parts.map((part, i) => {
+        const m = part.match(/^\[(\d+)\]$/);
+        if (!m) return <span key={i}>{part}</span>;
 
-          const n = Number(m[1]);
-          // Markers pointing past the source list (LLM slip) render as plain text.
-          if (n < 1 || n > answer.citations.length) return <span key={i}>{part}</span>;
+        const n = Number(m[1]);
+        // Markers pointing past the source list (LLM slip) render as plain text.
+        if (n < 1 || n > answer.citations.length) return <span key={i}>{part}</span>;
 
-          const active = activeCitation === n;
-          return (
-            <sup key={i}>
-              <button
-                onClick={() => onCite(active ? null : n)}
-                onMouseEnter={() => onCite(n)}
-                className={`mx-0.5 cursor-pointer rounded-sm px-1 font-mono text-[0.66em] font-medium
-                            transition-colors duration-200 ${
-                              active
-                                ? "bg-accent text-paper"
-                                : "bg-accentSoft text-accent hover:bg-accent hover:text-paper"
-                            }`}
-              >
-                {n}
-              </button>
-            </sup>
-          );
-        })}
-        {/* live caret while streaming (also covers the gap before the first token) */}
-        {streaming && (
-          <span className="ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-[0.15em] animate-pulse bg-accent" />
-        )}
-      </p>
-    </div>
+        const active = activeCitation === n;
+        return (
+          <sup key={i}>
+            <button
+              onClick={() => onCite(active ? null : n)}
+              onMouseEnter={() => onCite(n)}
+              className={`mx-[0.12em] cursor-pointer rounded-[4px] px-[0.34em] py-[0.06em] font-mono
+                          text-[0.6em] font-semibold align-super transition-colors duration-200 ${
+                            active
+                              ? "bg-accent text-paper"
+                              : "bg-accentSoft text-accent hover:bg-accent hover:text-paper"
+                          }`}
+            >
+              {n}
+            </button>
+          </sup>
+        );
+      })}
+      {/* live caret while streaming (also covers the gap before the first token) */}
+      {streaming && (
+        <span className="ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-[0.15em] animate-pulse bg-accent" />
+      )}
+    </p>
   );
 }

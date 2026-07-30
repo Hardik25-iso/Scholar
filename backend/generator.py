@@ -12,7 +12,7 @@ from collections.abc import Iterator
 
 import ollama
 
-from backend.models import Answer, Citation
+from backend.models import Answer, ChatTurn, Citation
 
 MODEL = "gemma3:4b"
 
@@ -59,6 +59,39 @@ def _messages(question: str, citations: list[Citation]) -> list[dict[str, str]]:
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user_message},
     ]
+
+
+CONDENSE_PROMPT = """Given the conversation so far and a follow-up question, \
+rewrite the follow-up as a standalone question that can be understood on its own, \
+without the conversation. Resolve pronouns and references ("it", "that", "the \
+second one") to what they refer to. Preserve the user's intent. Do NOT answer it. \
+Return ONLY the rewritten question, nothing else."""
+
+# Keep the condense prompt bounded: only the most recent turns matter for
+# resolving a follow-up, and a short prompt keeps this extra call fast.
+_CONDENSE_HISTORY_TURNS = 4
+
+
+def condense_question(question: str, history: list[ChatTurn]) -> str:
+    """Rewrite a follow-up into a standalone question using recent history.
+
+    Returns the original question unchanged if there is no history or the model
+    returns nothing usable — so this can never make retrieval worse than before.
+    """
+    if not history:
+        return question
+    recent = history[-_CONDENSE_HISTORY_TURNS:]
+    convo = "\n".join(f"Q: {t.question}\nA: {t.answer}" for t in recent)
+    response = ollama.chat(
+        model=MODEL,
+        messages=[
+            {"role": "system", "content": CONDENSE_PROMPT},
+            {"role": "user",
+             "content": f"Conversation:\n{convo}\n\nFollow-up: {question}\n\nStandalone question:"},
+        ],
+        options={"temperature": 0.0, "num_predict": 80},
+    )
+    return response["message"]["content"].strip() or question
 
 
 def warm_llm() -> None:

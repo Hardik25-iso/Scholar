@@ -47,15 +47,25 @@ class Answer(BaseModel):
     citations: list[Citation]      # the numbered sources, in [1..n] order
 
 
+class ChatTurn(BaseModel):
+    """One prior exchange in a conversation, sent back with a follow-up so the
+    question can be condensed into a standalone one before retrieval."""
+    question: str
+    answer: str
+
+
 class AskRequest(BaseModel):
     """Body of a POST /ask call.
 
     candidates = how many chunks the bi-encoder retrieves (stage 1);
-    k          = how many survive reranking and reach the LLM (stage 2).
+    k          = how many survive reranking and reach the LLM (stage 2);
+    history    = prior turns (oldest first). When non-empty, the question is a
+                 follow-up and gets condensed into a standalone query first.
     """
     question: str
     k: int = 5
     candidates: int = 20
+    history: list[ChatTurn] = []
 
 
 # ——— Auth boundary models ———

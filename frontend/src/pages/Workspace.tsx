@@ -80,6 +80,13 @@ export default function Workspace() {
   const handleAsk = async (question: string) => {
     setBusy(true);
     setActiveCitation(null);
+
+    // Prior completed turns become history so the server can resolve follow-ups
+    // into standalone questions. Strip [n] markers — they'd be noise to condense.
+    const history = exchanges
+      .filter((x) => x.answer && !x.streaming && !x.error)
+      .map((x) => ({ question: x.question, answer: x.answer!.answer.replace(/\[\d+\]/g, "").trim() }));
+
     setExchanges((xs) => [...xs, { question, answer: null, streaming: true, error: null }]);
 
     // The busy guard means only the last exchange is ever in flight, so we
@@ -88,7 +95,7 @@ export default function Workspace() {
       setExchanges((xs) => xs.map((x, i) => (i === xs.length - 1 ? fn(x) : x)));
 
     try {
-      await askStream(question, {
+      await askStream(question, history, {
         onCitations: (citations) =>
           patch((x) => ({ ...x, answer: { question, answer: "", citations } })),
         onToken: (text) =>

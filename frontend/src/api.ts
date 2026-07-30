@@ -87,6 +87,11 @@ export function ask(question: string): Promise<Answer> {
   return request<Answer>("/ask", { method: "POST", body: JSON.stringify({ question }) });
 }
 
+export interface ChatTurn {
+  question: string;
+  answer: string;
+}
+
 export interface StreamHandlers {
   onCitations: (citations: Citation[]) => void; // sent first, before any text
   onToken: (text: string) => void;              // one incremental answer delta
@@ -98,13 +103,16 @@ export interface StreamHandlers {
  * Streaming ask: retrieval + reranking happen up front (citations arrive first),
  * then the answer streams token-by-token. Uses fetch + a ReadableStream reader
  * parsing NDJSON — EventSource can't send our cross-origin auth cookie on a POST.
+ *
+ * `history` (prior turns) turns a bare follow-up into a standalone question on
+ * the server before retrieval, so pronouns like "what about it?" still work.
  */
-export async function askStream(question: string, h: StreamHandlers): Promise<void> {
+export async function askStream(question: string, history: ChatTurn[], h: StreamHandlers): Promise<void> {
   const res = await fetch(`${API_BASE}/ask/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
-    body: JSON.stringify({ question }),
+    body: JSON.stringify({ question, history }),
   });
   if (!res.ok || !res.body) return raise(res); // raise() throws (never returns)
 

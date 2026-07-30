@@ -26,7 +26,7 @@ from backend.config import settings
 from backend.db import init_db
 from backend.db_models import User
 from backend.embedder import embed
-from backend.generator import generate, stream_answer, warm_llm
+from backend.generator import condense_question, generate, stream_answer, warm_llm
 from backend.models import Answer, AskRequest, Citation
 from backend.papers import router as papers_router
 from backend.reranker import Reranker
@@ -91,29 +91,29 @@ def health() -> dict[str, str]:
 # Auth-protected and scoped: a user can only ever query their OWN papers.
 @app.post("/ask", response_model=Answer)
 def ask(request: AskRequest, user: User = Depends(get_current_user)) -> Answer:
-    retriever = library.get_retriever(user.id)
-    if retriever is None:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "no papers indexed yet — upload a PDF first",
-        )
-
-    # Stage 1: wide net.  Stage 2: rerank to the top k.  Stage 3: grounded answer.
-    candidates = retriever.retrieve(request.question, k=request.candidates)
-    citations = _reranker.rerank(request.question, candidates, top_k=request.k)
-    return generate(request.question, citations)
+    query, citations = _resolve_and_retrieve(user.id, request)
+    return generate(query, citations)
 
 
-def _retrieve_scoped(user_id: int, request: AskRequest):
-    """Shared stage 1+2 for the ask endpoints; raises 400 if the user has no papers."""
+def _resolve_and_retrieve(user_id: int, request: AskRequest) -> tuple[str, list[Citation]]:
+    """Condense a follow-up into a standalone query, then run stage 1+2 on it.
+
+    Returns (query, citations): `query` is what retrieval + generation should use
+    (the condensed standalone question for a follow-up, else the original), and
+    `citations` are the reranked sources. Raises 400 if the user has no papers.
+    """
     retriever = library.get_retriever(user_id)
     if retriever is None:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             "no papers indexed yet — upload a PDF first",
         )
-    candidates = retriever.retrieve(request.question, k=request.candidates)
-    return _reranker.rerank(request.question, candidates, top_k=request.k)
+    # For a follow-up, rewrite it to stand alone so retrieval doesn't choke on
+    # pronouns ("what about it?"). No-op when there's no history.
+    query = condense_question(request.question, request.history)
+    candidates = retriever.retrieve(query, k=request.candidates)
+    citations = _reranker.rerank(query, candidates, top_k=request.k)
+    return query, citations
 
 
 # Streaming variant of /ask. Retrieval + reranking run up front, so we can send
@@ -124,13 +124,13 @@ def _retrieve_scoped(user_id: int, request: AskRequest):
 # Sync `def` so Starlette iterates the blocking Ollama generator in a threadpool.
 @app.post("/ask/stream")
 def ask_stream(request: AskRequest, user: User = Depends(get_current_user)) -> StreamingResponse:
-    citations = _retrieve_scoped(user.id, request)
+    query, citations = _resolve_and_retrieve(user.id, request)
 
     def ndjson():
         yield json.dumps({"type": "citations",
                           "citations": [c.model_dump() for c in citations]}) + "\n"
         try:
-            for delta in stream_answer(request.question, citations):
+            for delta in stream_answer(query, citations):
                 yield json.dumps({"type": "token", "text": delta}) + "\n"
             yield json.dumps({"type": "done"}) + "\n"
         except Exception as exc:  # surface a mid-stream failure to the client

@@ -12,6 +12,15 @@ data/
 # Node / frontend
 node_modules/
 frontend/dist/
+frontend/tsconfig.tsbuildinfo
+
+# Local tooling config (kept on disk, not published)
+claude.md
+.claude/
+
+# Stray local files
+*.pptx
+backend/api.py.tmp.*
 
 # OS / editor
 .DS_Store

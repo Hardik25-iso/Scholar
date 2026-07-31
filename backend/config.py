@@ -3,9 +3,9 @@
 All runtime knobs live here so nothing secret is hard-coded. Values come from
 (in order) real environment variables, then the .env file (git-ignored).
 
-NOTE: the legacy ANTHROPIC_API_KEY in .env is NOT used by Scholar — generation
-runs locally via Ollama. It should be rotated and removed; it's declared here only
-so pydantic-settings doesn't reject the extra field. See DESIGN notes.
+NOTE: .env may hold unrelated legacy keys from earlier experiments; they are NOT
+used by Scholar (generation runs locally via Ollama). `extra="ignore"` below lets
+pydantic-settings tolerate such stray keys instead of failing at startup.
 """
 from pydantic_settings import BaseSettings, SettingsConfigDict
 

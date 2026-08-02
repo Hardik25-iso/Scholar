@@ -102,7 +102,7 @@ function readCookie(name: string): string | null {
  * auth cookie is cross-origin 5173->8001) and attaches the CSRF header on
  * unsafe methods via the double-submit pattern.
  */
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+function buildHeaders(options: RequestInit): Headers {
   const method = (options.method ?? "GET").toUpperCase();
   const headers = new Headers(options.headers);
   if (options.body) headers.set("Content-Type", "application/json");
@@ -110,11 +110,50 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     const csrf = readCookie("csrf_token");
     if (csrf) headers.set("X-CSRF-Token", csrf);
   }
+  return headers;
+}
+
+/**
+ * Ask the backend for a new access token using the refresh cookie.
+ *
+ * Shared across concurrent callers: a page that fires several requests at once
+ * would otherwise hit 401 on each and start a refresh per request, and all but
+ * one would be wasted. The in-flight promise is reused instead.
+ */
+let refreshing: Promise<boolean> | null = null;
+
+function refreshSession(): Promise<boolean> {
+  if (!refreshing) {
+    refreshing = fetch(`${API_BASE}/auth/refresh`, {
+      method: "POST",
+      headers: buildHeaders({ method: "POST" }),
+      credentials: "include",
+    })
+      .then((r) => r.ok)
+      .catch(() => false)
+      .finally(() => {
+        refreshing = null;
+      });
+  }
+  return refreshing;
+}
+
+async function request<T>(path: string, options: RequestInit = {}, retry = true): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
-    headers,
+    headers: buildHeaders(options),
     credentials: "include", // send/receive the auth cookie cross-origin
   });
+
+  // The access token is short-lived by design. Rather than logging someone out
+  // mid-sentence, spend one refresh and replay the request. Only ever once —
+  // if the refresh token is gone too, the session really has ended, and a loop
+  // here would hammer the server on every failed request.
+  // `/auth/refresh` itself is excluded so a failed refresh cannot recurse.
+  if (res.status === 401 && retry && path !== "/auth/refresh") {
+    if (await refreshSession()) return request<T>(path, options, false);
+  }
+
   if (!res.ok) await raise(res);
   if (res.status === 204) return undefined as T; // No Content (e.g. DELETE)
   return res.json();

@@ -5,12 +5,15 @@ Separated from the route so the /ask path stays a thin orchestration and the
 """
 import hashlib
 import json
+import logging
 from pathlib import Path
 
 from sqlmodel import Session, select
 
 from backend.db_models import AnswerLog
 from backend.models import Answer, AskRequest, Citation
+
+log = logging.getLogger(__name__)
 
 # Fields of a Citation worth keeping forever. `text` is included deliberately:
 # the stored passage is the evidence. Re-reading it from the index later would
@@ -90,7 +93,9 @@ def record(
         return entry
     except Exception as exc:  # noqa: BLE001 — never fail a served answer
         session.rollback()
-        print(f"[audit] failed to record answer: {exc}", flush=True)
+        # exc_info so a lost audit row leaves a traceback to diagnose, not just
+        # a one-line regret.
+        log.exception("failed to record answer for user %s: %s", user_id, exc)
         return None
 
 

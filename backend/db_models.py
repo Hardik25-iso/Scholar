@@ -40,6 +40,25 @@ class Paper(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_utcnow)
 
 
+class PasswordResetToken(SQLModel, table=True):
+    """A one-time, expiring permission to set a new password.
+
+    Only the token's HASH is stored, for the same reason passwords are hashed: a
+    leaked database must not hand over working reset links.
+
+    Single use is enforced by `used_at` rather than by deleting the row, so a
+    replayed link is distinguishable from one that never existed — useful when
+    someone reports that their reset "didn't work".
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True, foreign_key="user.id")
+    token_hash: str = Field(index=True, unique=True)
+    expires_at: datetime
+    created_at: datetime = Field(default_factory=_utcnow)
+    used_at: datetime | None = None
+
+
 class AnswerLog(SQLModel, table=True):
     """One answered question, with the complete evidence it was built from.
 

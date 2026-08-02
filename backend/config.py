@@ -20,6 +20,13 @@ class Settings(BaseSettings):
     # SQLite lives under data/ (git-ignored) so the DB is never committed.
     database_url: str = "sqlite:///./data/scholar.db"
 
+    # Where per-user libraries (FAISS indexes, lexical indexes, stored files)
+    # live. Empty means the repo-local `data/users`, which is right for local
+    # development and WRONG for any real deployment: the default sits inside the
+    # source tree, so a redeploy that replaces the source silently destroys every
+    # user's library. Point this at a mounted volume before serving anyone.
+    data_root: str = ""
+
     # The browser origin allowed to call this API (the Vite dev server).
     frontend_origin: str = "http://localhost:5173"
 
@@ -28,8 +35,21 @@ class Settings(BaseSettings):
     # default, a missing SECRET_KEY makes the app fail loudly at startup.
     secret_key: str
 
-    # Access-token lifetime. Short by design; no refresh tokens yet.
+    # Access-token lifetime. Short by design: a stolen access token expires
+    # quickly. The refresh token is what keeps that from meaning "logged out
+    # every 30 minutes" — it is long-lived but can only mint access tokens.
     access_token_expire_minutes: int = 30
+    refresh_token_expire_days: int = 30
+
+    # How long a password-reset link stays valid. Short, because the window in
+    # which a leaked link is useful should be measured in minutes.
+    reset_token_expire_minutes: int = 30
+
+    # Per-user request budgets. /ask runs retrieval, reranking and a full LLM
+    # generation, so it is the expensive route and the one worth capping — and
+    # it becomes a billing control the moment generation is a paid API.
+    ask_rate_limit_per_hour: int = 120
+    upload_rate_limit_per_hour: int = 60
 
     # Cookie flags. In local dev over http://localhost, SameSite=Lax works
     # without Secure (localhost is treated as same-site + a secure context).

@@ -397,9 +397,64 @@ through a real server.
 
 ---
 
-### Phase 4 — Durable and operable *(2 weeks)*
+### Phase 4 — Durable and operable *(2 weeks)* — **MOSTLY DONE**
 
 Prerequisite for any external user, and for Phase 5 — team data multiplies the cost of data loss.
+
+- **The silent data-loss bug — FIXED.** `library.DATA_ROOT` was resolved relative to its own source
+  file, so every user library lived *inside the source tree*. A redeploy that replaces the source
+  destroyed all of it, with no error to notice. Now `settings.data_root`, and startup logs a loud
+  warning when it is unset, naming the path that is about to be at risk.
+- **Backup and restore — DONE, and tested by actually restoring.** `python -m backend.backup
+  create|verify|restore`. The archive carries the database *and* the data tree together, because
+  either alone is a broken library — the database says a paper exists, the data tree holds its
+  vectors. `restore` refuses to run over existing data without `--force` (the failure mode is
+  someone restoring a stale backup while only meaning to inspect it) and replaces rather than
+  merges (a restore reproduces a moment; a merge would resurrect deleted documents). Archives are
+  untrusted input, so extraction is guarded by both an explicit traversal check and
+  `filter="data"`. Refuses outright on a non-SQLite `database_url` rather than writing an archive
+  silently missing half the data.
+- **Refresh tokens — DONE.** A 30-minute hard logout mid-session is gone. The critical detail:
+  both token kinds are signed with the same key, so the payload carries a `typ` claim — without it
+  a long-lived refresh token would work as an access token for its entire lifetime, silently
+  undoing the short access expiry. Tokens minted before `typ` existed fail closed. The refresh
+  cookie is scoped to `/auth/refresh` so a long-lived credential is not attached to every request,
+  and the CSRF cookie deliberately outlives the access token so a silently-refreshed session never
+  fails a CSRF check for want of a fresh cookie. The frontend spends one refresh on a 401 and
+  replays the request, sharing a single in-flight refresh across concurrent callers.
+- **Password reset — DONE server-side.** Permanent lockout is gone. Only the token *hash* is
+  stored; `/auth/forgot` always returns 202 so it cannot be used as an account-existence oracle;
+  tokens are single-use, expiring, and using one burns every other outstanding token for that
+  account.
+- **Rate limiting — DONE, with a stated limitation.** Per-user hourly budgets on `/ask` and upload
+  — the two expensive routes, and a *billing* control once generation is a paid API. The counter
+  is in process memory: exact with one worker, N times the limit with N workers, forgotten on
+  restart. That makes it a guard against runaway loops and honest mistakes, **not** a defence
+  against a determined attacker. A shared store (Redis) is the fix and is a deployment decision.
+- **Structured logging — DONE.** `print` replaced with the `logging` module throughout the request
+  path, so output has levels, timestamps and logger names, and a lost audit row leaves a traceback.
+
+#### Not done, and why
+
+- **Job queue for indexing.** `papers.py` still indexes synchronously inside the upload request, so
+  a large document can exceed a proxy timeout. This genuinely needs a new dependency (`arq`/RQ plus
+  Redis, or equivalent) and a deployment decision, so it is not something to slip in unannounced.
+  **This is the top remaining item in this phase.**
+- **Refresh-token rotation and revocation.** Refreshing re-issues the cookie so the expiry slides,
+  but the previous refresh token stays valid until it expires — a stolen one cannot be revoked.
+  Real rotation needs server-side token state (a table like `PasswordResetToken`), which is a
+  contained piece of work but was not in scope here.
+- **Reset-link delivery.** `auth.deliver_reset_token` logs the token instead of emailing it,
+  because no mail provider is configured. It is written as a seam — wiring a provider means
+  replacing that function body and nothing else — and it says plainly in its own docstring that
+  password reset must not be exposed to real users until it is replaced. No reset UI was built, on
+  purpose: a form promising an email that never arrives is worse than no form.
+- **`cookie_secure=True` / `SameSite=None`** remain settings, correct for the eventual HTTPS
+  deployment and wrong for local development. Flipping them is a deploy-time change, not a code one.
+
+**Acceptance — met for durability.** A library was built, backed up, **deleted the way a redeploy
+would delete it**, restored, and then still answered questions through the API with citations.
+207 tests green; 23/23 through a real server across a stop/destroy/restore/restart cycle.
 
 - **Persistent storage + tested restore.** FAISS indexes and documents move off ephemeral local
   disk. A redeploy currently deletes every user's library silently.

@@ -8,6 +8,7 @@ IndexFlatIP with L2-normalised vectors gives true cosine similarity.
 Exact search (no approximation) is fine up to ~100 k chunks.
 """
 import json
+import logging
 from pathlib import Path
 
 import faiss
@@ -38,7 +39,7 @@ def build(chunks: list[Chunk], vectors: np.ndarray, store_dir: str | Path) -> No
     (store_dir / "chunks.json").write_text(
         json.dumps(indexed, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    print(f"Stored {len(indexed)} chunks -> {store_dir}")
+    logging.getLogger(__name__).info("stored %d chunks -> %s", len(indexed), store_dir)
 
 
 def load(store_dir: str | Path) -> tuple[faiss.IndexFlatIP, list[IndexedChunk]]:

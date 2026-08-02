@@ -18,6 +18,7 @@ from backend.db_models import Paper, User
 from backend.models import PaperPublic
 from backend import parser
 from backend.parser import SUPPORTED_EXTENSIONS
+from backend.ratelimit import upload_limiter
 
 router = APIRouter(prefix="/papers", tags=["papers"])
 
@@ -58,6 +59,11 @@ async def upload_paper(
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ) -> Paper:
+    # Indexing is the second-most expensive thing this app does (parse, OCR,
+    # embed). Charged before reading the body, so a rate-limited caller does not
+    # get to make the server buffer 20 MB first.
+    upload_limiter.check(str(user.id))
+
     # Validate type + size before doing any expensive work. The EXTENSION is the
     # gate, not the browser-supplied content type: content_type is client-chosen
     # and varies by OS for the office formats, while the extension is what

@@ -77,8 +77,16 @@ def client() -> TestClient:
 
 
 def _reset_state() -> None:
-    """Truncate every table and wipe per-user storage between tests."""
+    """Truncate every table and wipe per-user storage between tests.
+
+    Also clears the two process-global caches. Without this the rate limiters
+    accumulate across the whole session and later tests start getting 429s that
+    have nothing to do with what they are testing — which makes results depend
+    on test ORDER, the least debuggable kind of failure.
+    """
     from sqlmodel import Session, SQLModel, delete
+
+    from backend.ratelimit import ask_limiter, upload_limiter
 
     with Session(engine) as session:
         for table in reversed(SQLModel.metadata.sorted_tables):
@@ -86,6 +94,8 @@ def _reset_state() -> None:
         session.commit()
     shutil.rmtree(library.DATA_ROOT, ignore_errors=True)
     library._retrievers.clear()  # the per-user Retriever cache is process-global
+    ask_limiter.reset()
+    upload_limiter.reset()
 
 
 @pytest.fixture

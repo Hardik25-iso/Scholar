@@ -136,6 +136,18 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    """A reset token plus the new password, held to the same rules as sign-up."""
+    token: str
+    password: str
+
+    _check_password = field_validator("password")(RegisterRequest.password_rules.__func__)
+
+
 class UserPublic(BaseModel):
     """A user as exposed over the wire — never includes the password hash."""
     id: int

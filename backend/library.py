@@ -15,12 +15,17 @@ from pathlib import Path
 
 from backend import lexical
 from backend.chunker import chunk_pages
+from backend.config import settings
 from backend.embedder import embed
 from backend.parser import extract_pages, unit_for
 from backend.retriever import Retriever
 from backend.store import append_to_store, remove_paper
 
-DATA_ROOT = Path(__file__).parent.parent / "data" / "users"
+# Configurable, because the fallback is INSIDE the source tree: a deployment that
+# replaces the source on redeploy would take every user's library with it, with
+# no error to notice. Set DATA_ROOT to a mounted volume in any real deployment.
+DEFAULT_DATA_ROOT = Path(__file__).parent.parent / "data" / "users"
+DATA_ROOT = Path(settings.data_root) if settings.data_root else DEFAULT_DATA_ROOT
 
 # One loaded Retriever per user, reused across their /ask calls (loading the
 # FAISS index + chunks.json every request would be wasteful). Invalidated

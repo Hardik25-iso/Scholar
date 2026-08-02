@@ -13,6 +13,7 @@ from the library cache rather than a single global.
 Run:  uvicorn backend.api:app --reload   (use the .venv interpreter)
 """
 import json
+import logging
 import threading
 from contextlib import asynccontextmanager
 
@@ -32,7 +33,10 @@ from backend.embedder import embed
 from backend.generator import condense_question, generate, stream_answer, warm_llm
 from backend.models import Answer, AskRequest, Citation
 from backend.papers import router as papers_router
+from backend.ratelimit import ask_limiter
 from backend.reranker import Reranker
+
+log = logging.getLogger(__name__)
 
 # The reranker model is heavy and stateless, so load it once and share it. The
 # retriever is now PER USER (each user has their own index), so it is resolved
@@ -53,16 +57,30 @@ def _warm_models() -> None:
             Citation(paper_id="_", page=0, chunk_index=0, score=0.0, text="warm up passage")
         ], top_k=1)
         warm_llm()                                               # Ollama gemma3:4b
-        print("[warm] models ready", flush=True)
+        log.info("models ready")
     except Exception as exc:  # e.g. Ollama not running
-        print(f"[warm] skipped (non-fatal): {exc}", flush=True)
+        log.warning("model warm-up skipped (non-fatal): %s", exc)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: create DB tables, then warm models in the background so startup
     # stays instant while the first-request cold-load happens ahead of time.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S%z",
+    )
     init_db()
+    # Loud about the one misconfiguration that destroys data without an error:
+    # the default library location lives inside the source tree.
+    if not settings.data_root:
+        log.warning(
+            "DATA_ROOT is unset — user libraries live in the source tree at %s. "
+            "A redeploy that replaces the source will DELETE every library. "
+            "Set DATA_ROOT to a mounted volume before serving real users.",
+            library.DATA_ROOT,
+        )
     threading.Thread(target=_warm_models, name="warm", daemon=True).start()
     yield
 
@@ -104,6 +122,7 @@ def ask(
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ) -> Answer:
+    ask_limiter.check(str(user.id))
     query, citations = _resolve_and_retrieve(user.id, request)
     answer = generate(query, citations)
     _record(session, user.id, request, query, answer)
@@ -166,6 +185,7 @@ def ask_stream(
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ) -> StreamingResponse:
+    ask_limiter.check(str(user.id))
     query, citations = _resolve_and_retrieve(user.id, request)
 
     def ndjson():

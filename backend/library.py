@@ -1,7 +1,7 @@
-"""Per-user paper library: storage layout, indexing, retrieval scoping.
+"""Per-user document library: storage layout, indexing, retrieval scoping.
 
 Each user gets an isolated directory tree under data/users/<id>/:
-    papers/<paper_id>.pdf   — the original upload (kept for future in-app viewing)
+    papers/<paper_id>.<ext> — the original upload, in its own format
     index/index.faiss       — that user's FAISS index (ALL their papers)
     index/chunks.json       — chunk metadata, each chunk tagged by paper_id
 
@@ -13,9 +13,10 @@ CLI uses, so indexing behaves identically here.
 import re
 from pathlib import Path
 
+from backend import lexical
 from backend.chunker import chunk_pages
 from backend.embedder import embed
-from backend.parser import extract_pages
+from backend.parser import extract_pages, unit_for
 from backend.retriever import Retriever
 from backend.store import append_to_store, remove_paper
 
@@ -53,24 +54,41 @@ def get_retriever(user_id: int) -> Retriever | None:
     return _retrievers[user_id]
 
 
-def index_pdf(user_id: int, pdf_path: Path, paper_id: str) -> int:
-    """Parse -> chunk -> embed -> append a PDF into the user's index.
+def stored_path(user_id: int, paper_id: str) -> Path | None:
+    """The stored file for a paper, whatever its format — or None if it's gone.
 
-    Returns the number of chunks this paper contributed (0 if the PDF had no
-    extractable text — e.g. a pure scan, which we treat as an upload failure).
+    Globbed rather than assembled, because the extension varies by format and
+    `paper_id` is a slug that only this module mints (see `slugify`), so it can
+    never contain a glob metacharacter.
     """
-    pages = extract_pages(pdf_path)
-    chunks = chunk_pages(pages, paper_id)
+    return next(iter(sorted(user_papers_dir(user_id).glob(f"{paper_id}.*"))), None)
+
+
+def index_document(user_id: int, doc_path: Path, paper_id: str) -> int:
+    """Parse -> chunk -> embed -> append a document into the user's index.
+
+    Returns the number of chunks this document contributed, or 0 if it had no
+    extractable text — an unOCR-able scan, or a file that is genuinely empty.
+    The caller treats 0 as an upload failure.
+    """
+    pages = extract_pages(doc_path)
+    chunks = chunk_pages(pages, paper_id, unit=unit_for(doc_path))
     if not chunks:
         return 0
     vectors = embed([c.embed_text for c in chunks], progress=False)
     append_to_store(chunks, vectors, user_index_dir(user_id))
+    # Mirror the same chunks into the user's lexical index. Both stores live in
+    # the same directory and are written together, so they cannot drift apart.
+    lexical.index_chunks(chunks, user_index_dir(user_id))
     invalidate(user_id)
     return len(chunks)
 
 
 def delete_paper_data(user_id: int, paper_id: str) -> None:
-    """Remove a paper's chunks from the index and delete its stored PDF."""
+    """Remove a paper's chunks from both indexes and delete its stored file."""
     remove_paper(user_index_dir(user_id), paper_id)
-    (user_papers_dir(user_id) / f"{paper_id}.pdf").unlink(missing_ok=True)
+    lexical.remove_paper(user_index_dir(user_id), paper_id)
+    path = stored_path(user_id, paper_id)
+    if path is not None:
+        path.unlink(missing_ok=True)
     invalidate(user_id)

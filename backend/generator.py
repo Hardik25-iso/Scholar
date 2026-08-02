@@ -16,6 +16,11 @@ from backend.models import Answer, ChatTurn, Citation
 
 MODEL = "gemma3:4b"
 
+# temperature 0 => deterministic, faithful answers (no creative drift). Named
+# rather than inlined because the audit log records it: "which model, at what
+# temperature" is part of explaining why two answers differed.
+TEMPERATURE = 0.0
+
 # The system prompt encodes the grounding contract. Kept strict on purpose:
 # use only the sources, cite by number, and refuse when the answer isn't there.
 SYSTEM_PROMPT = """You are a precise research assistant. Answer the user's \
@@ -44,8 +49,7 @@ def generate(question: str, citations: list[Citation]) -> Answer:
     response = ollama.chat(
         model=MODEL,
         messages=_messages(question, citations),
-        # temperature 0 => deterministic, faithful answers (no creative drift).
-        options={"temperature": 0.0},
+        options={"temperature": TEMPERATURE},
     )
 
     answer_text = response["message"]["content"].strip()
@@ -114,7 +118,7 @@ def stream_answer(question: str, citations: list[Citation]) -> Iterator[str]:
     stream = ollama.chat(
         model=MODEL,
         messages=_messages(question, citations),
-        options={"temperature": 0.0},
+        options={"temperature": TEMPERATURE},
         stream=True,
     )
     for part in stream:

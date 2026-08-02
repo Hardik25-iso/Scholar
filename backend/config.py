@@ -37,5 +37,12 @@ class Settings(BaseSettings):
     cookie_secure: bool = False
     cookie_samesite: str = "lax"
 
+    # Where Tesseract's language data lives, for OCR of scanned PDFs. Empty means
+    # "discover it" — see parser._tessdata(), which checks TESSDATA_PREFIX and the
+    # standard install locations. Set this explicitly when deploying to an image
+    # that puts tessdata somewhere non-standard. OCR is optional: with no data
+    # directory a scanned PDF is rejected with a clear 422, not a crash.
+    tessdata_prefix: str = ""
+
 
 settings = Settings()

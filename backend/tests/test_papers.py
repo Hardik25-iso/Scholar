@@ -106,7 +106,7 @@ def test_office_formats_index_end_to_end(alice: TestClient, request, filename, f
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(not ocr_available(), reason="Tesseract not installed on this machine")
+@pytest.mark.skipif(not ocr_available(), reason="OCR unavailable here (no Tesseract, or disabled)")
 def test_a_scanned_pdf_indexes_and_is_retrievable(alice: TestClient, scanned_pdf: bytes):
     """The single most common professional document — a signed, scanned contract —
     used to be rejected outright with 422."""
@@ -126,10 +126,18 @@ def test_scanned_pdf_without_ocr_explains_the_server_cannot_do_it(
     alice: TestClient, scanned_pdf: bytes, monkeypatch
 ):
     """Blaming the file would be wrong — the file is fine, the server lacks OCR.
-    Simulated so this holds on a machine where Tesseract IS installed."""
-    monkeypatch.setattr("backend.parser._tessdata", lambda: None)
+
+    Turns OCR off via the setting rather than by blanking the tessdata path.
+    Those are not the same thing: Tesseract falls back to its own compiled-in
+    data location, so on any Linux package install a blanked path still OCRs
+    happily. An earlier version of this test patched the path and therefore only
+    passed on Windows — it was green locally and red in CI.
+    """
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "ocr_enabled", False)
     r = _upload(alice, "signed.pdf", scanned_pdf)
-    assert r.status_code == 422
+    assert r.status_code == 422, r.text
     assert "OCR is not available on this server" in r.json()["detail"]
 
 

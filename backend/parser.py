@@ -110,8 +110,20 @@ def _tessdata() -> str | None:
     return None
 
 
-def ocr_available() -> bool:
-    """Whether OCR can actually run here — binary present AND language data found."""
+@lru_cache(maxsize=1)
+def _tesseract_works() -> bool:
+    """Probe once whether Tesseract can actually run here.
+
+    Cached because it shells out to the binary, and whether a binary exists does
+    not change while the process runs — probing per scanned page would pay that
+    cost on every page of every scan.
+
+    Note what this does NOT test: passing `tessdata=None` is not the same as
+    "no OCR". Tesseract falls back to its own compiled-in data location, which
+    is exactly how a Linux package install works — so a machine with no
+    configured tessdata path can still OCR perfectly well. Disabling OCR is
+    `settings.ocr_enabled`, below, not the absence of a path.
+    """
     doc = fitz.open()
     try:
         doc.new_page().get_textpage_ocr(tessdata=_tessdata())
@@ -122,14 +134,21 @@ def ocr_available() -> bool:
         doc.close()
 
 
+def ocr_available() -> bool:
+    """Whether a scanned page will actually be OCR'd: switched on AND working."""
+    return settings.ocr_enabled and _tesseract_works()
+
+
 def _ocr_page(page: fitz.Page) -> str:
     """OCR one page, or return "" if OCR is unavailable.
 
-    Returning "" rather than raising is deliberate: a missing OCR binary must
-    degrade a scanned page to "no extractable text" — the same 422 the upload
-    already produces — instead of turning every mixed document into a hard
-    failure because one page happened to be an image.
+    Returning "" rather than raising is deliberate: unavailable OCR must degrade
+    a scanned page to "no extractable text" — the same 422 the upload already
+    produces — instead of turning every mixed document into a hard failure
+    because one page happened to be an image.
     """
+    if not ocr_available():
+        return ""
     try:
         return page.get_text(textpage=page.get_textpage_ocr(full=False, tessdata=_tessdata()))
     except (RuntimeError, TypeError):

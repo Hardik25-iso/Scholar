@@ -57,6 +57,13 @@ class Settings(BaseSettings):
     cookie_secure: bool = False
     cookie_samesite: str = "lax"
 
+    # Whether to OCR scanned PDFs at all. OCR is slow and CPU-hungry, so a small
+    # instance may reasonably refuse it — and an explicit switch is the only
+    # honest way to express "off". Clearing tessdata_prefix does NOT disable it:
+    # Tesseract falls back to its own compiled-in data location, which is how
+    # every Linux package install works.
+    ocr_enabled: bool = True
+
     # Where Tesseract's language data lives, for OCR of scanned PDFs. Empty means
     # "discover it" — see parser._tessdata(), which checks TESSDATA_PREFIX and the
     # standard install locations. Set this explicitly when deploying to an image

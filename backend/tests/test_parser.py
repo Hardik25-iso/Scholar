@@ -128,13 +128,48 @@ def test_a_scanned_pdf_really_has_no_text_layer(tmp_path: Path):
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(not ocr_available(), reason="Tesseract not installed on this machine")
+@pytest.mark.skipif(not ocr_available(), reason="OCR unavailable here (no Tesseract, or disabled)")
 def test_scanned_pdf_is_recovered_by_ocr(tmp_path: Path):
     """The document class that was previously a hard 422: a scan."""
     path = _scanned_pdf(tmp_path, "Force Majeure clause seven point two")
     text = " ".join(extract_pages(path)[0].split())
     assert "Force Majeure" in text
     assert "seven point two" in text
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not ocr_available(), reason="OCR unavailable here (no Tesseract, or disabled)")
+def test_clearing_the_tessdata_path_does_not_disable_ocr(tmp_path: Path, monkeypatch):
+    """The trap that made an earlier test pass on Windows and fail in CI.
+
+    Tesseract falls back to its own compiled-in data location, so a blank
+    tessdata path still OCRs on any normal Linux install. This asserts the
+    surprising behaviour directly, so nobody reaches for the path again when
+    they mean to turn OCR off.
+    """
+    from backend import parser
+
+    monkeypatch.setattr(parser, "_tessdata", lambda: None)
+    parser._tesseract_works.cache_clear()
+    try:
+        text = " ".join(extract_pages(_scanned_pdf(tmp_path, "Retention is eighty four months"))[0].split())
+    finally:
+        parser._tesseract_works.cache_clear()
+
+    # On a machine that CAN find its own tessdata, OCR still ran. On one that
+    # cannot, it degraded to "" — never an exception, and never a crash.
+    assert text == "" or "eighty four months" in text
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not ocr_available(), reason="OCR unavailable here (no Tesseract, or disabled)")
+def test_ocr_enabled_false_really_disables_ocr(tmp_path: Path, monkeypatch):
+    """The switch that DOES turn OCR off, on every platform."""
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "ocr_enabled", False)
+    assert ocr_available() is False
+    assert extract_pages(_scanned_pdf(tmp_path, "Retention is eighty four months")) == [""]
 
 
 def test_ocr_is_skipped_on_pages_that_already_have_text(tmp_path: Path, monkeypatch):

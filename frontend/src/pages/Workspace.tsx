@@ -45,7 +45,15 @@ export default function Workspace() {
   // (the file endpoint keys on the DB id). If the paper was deleted, do nothing.
   const openSource = (c: Citation) => {
     const paper = papers.find((p) => p.paper_id === c.paper_id);
-    if (paper) setViewer({ paperDbId: paper.id, title: paper.title, page: c.page });
+    if (paper)
+      setViewer({
+        paperDbId: paper.id,
+        title: paper.title,
+        page: c.page,
+        locator: c.locator,
+        unit: c.unit,
+        passage: c.text,
+      });
   };
 
   const latestAnswer = [...exchanges].reverse().find((e) => e.answer)?.answer;

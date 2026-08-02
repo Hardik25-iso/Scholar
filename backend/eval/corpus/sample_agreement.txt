@@ -1,0 +1,132 @@
+MASTER SERVICES AGREEMENT
+===PAGE===
+This Master Services Agreement (the "Agreement") is entered into on 14 March 2024
+(the "Effective Date") by and between Northwind Analytics Ltd., a company
+registered in England and Wales with company number 09488213, having its
+registered office at 42 Bishopsgate, London EC2N 4AJ ("Supplier"), and
+Cedarpoint Financial Group Inc., a Delaware corporation with its principal place
+of business at 1900 Market Street, Philadelphia, PA 19103 ("Client").
+
+1. DEFINITIONS
+
+1.1 "Services" means the data analytics and reporting services described in
+Schedule A, as amended from time to time by written agreement of the parties.
+
+1.2 "Deliverables" means the reports, dashboards, models and documentation
+produced by Supplier in the course of performing the Services.
+
+1.3 "Confidential Information" means any non-public information disclosed by one
+party to the other, whether orally, in writing or in any other form, that is
+designated as confidential or that a reasonable person would understand to be
+confidential given the nature of the information and the circumstances of
+disclosure.
+
+2. TERM AND RENEWAL
+
+2.1 This Agreement commences on the Effective Date and continues for an initial
+term of thirty-six (36) months (the "Initial Term").
+
+2.2 Following the Initial Term, this Agreement shall renew automatically for
+successive periods of twelve (12) months each (each a "Renewal Term") unless
+either party gives written notice of non-renewal not less than ninety (90) days
+before the end of the then-current term.
+===PAGE===
+3. FEES AND PAYMENT
+
+3.1 Client shall pay Supplier an annual subscription fee of USD 480,000, payable
+in four equal quarterly instalments of USD 120,000 in advance.
+
+3.2 Supplier may increase the subscription fee once per Renewal Term by no more
+than the lesser of (a) four percent (4%) or (b) the increase in the Consumer
+Price Index over the preceding twelve months.
+
+3.3 Invoices are payable within thirty (30) days of receipt. Overdue amounts
+accrue interest at one and one-half percent (1.5%) per month or the maximum rate
+permitted by applicable law, whichever is lower.
+
+3.4 Fee schedule by service tier:
+
+  Tier          Included Seats    Annual Fee (USD)    Support Response
+  Standard      25                180,000             next business day
+  Professional  100               480,000             four hours
+  Enterprise    unlimited         960,000             one hour
+
+4. SERVICE LEVELS
+
+4.1 Supplier shall maintain availability of the hosted Services of at least
+99.5% measured monthly, excluding Scheduled Maintenance.
+
+4.2 If availability falls below 99.5% in any calendar month, Client is entitled
+to a service credit equal to five percent (5%) of the monthly fee for each full
+percentage point below the target, capped at thirty percent (30%) of the monthly
+fee.
+
+4.3 Scheduled Maintenance shall not exceed eight (8) hours per calendar month
+and shall be notified to Client at least five (5) business days in advance.
+===PAGE===
+5. CONFIDENTIALITY
+
+5.1 Each party shall keep the other party's Confidential Information in strict
+confidence and shall not disclose it to any third party except to its employees,
+advisers and subcontractors who need to know it for the purposes of this
+Agreement.
+
+5.2 The obligations in this Section 5 survive termination of this Agreement for
+a period of five (5) years.
+
+6. DATA PROTECTION
+
+6.1 Supplier acts as a processor and Client as a controller in respect of
+personal data processed under this Agreement, within the meaning of the UK GDPR.
+
+6.2 Supplier shall not transfer personal data outside the United Kingdom or the
+European Economic Area without Client's prior written consent.
+
+6.3 Supplier shall notify Client without undue delay, and in any event within
+seventy-two (72) hours, of becoming aware of any personal data breach.
+
+7. LIABILITY AND FORCE MAJEURE
+
+7.1 Except in respect of death or personal injury caused by negligence, fraud,
+or breach of Section 5, each party's total aggregate liability arising out of or
+in connection with this Agreement shall not exceed the total fees paid by Client
+in the twelve (12) months immediately preceding the event giving rise to the
+claim.
+
+7.2 Force Majeure. Neither party shall be liable for any failure or delay in
+performing its obligations under this Agreement to the extent that such failure
+or delay results from an event beyond its reasonable control, including acts of
+God, war, terrorism, epidemic, industrial action, or failure of a utility or
+telecommunications provider. The affected party shall notify the other party
+within ten (10) business days and shall use reasonable endeavours to resume
+performance.
+
+7.3 If a Force Majeure event continues for more than sixty (60) consecutive
+days, either party may terminate this Agreement on written notice without
+liability.
+===PAGE===
+8. TERMINATION
+
+8.1 Either party may terminate this Agreement immediately on written notice if
+the other party commits a material breach that is not remedied within thirty
+(30) days of written notice requiring it to be remedied.
+
+8.2 On termination, Supplier shall return or securely destroy all Client data
+within sixty (60) days and shall certify such destruction in writing.
+
+9. GOVERNING LAW
+
+9.1 This Agreement is governed by the laws of England and Wales, and the parties
+submit to the exclusive jurisdiction of the courts of England and Wales.
+
+10. NOTICES
+
+10.1 Notices under this Agreement shall be sent to legal@northwind-analytics.example
+for Supplier and to contracts@cedarpoint.example for Client, and are deemed
+received on the next business day following transmission.
+
+SIGNED for and on behalf of Northwind Analytics Ltd. by Priya Raghunathan,
+Chief Operating Officer, on 14 March 2024.
+
+SIGNED for and on behalf of Cedarpoint Financial Group Inc. by Daniel Okonkwo,
+General Counsel, on 14 March 2024.

@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    env:
+      # The suite redirects storage to a temp dir (see backend/tests/conftest.py),
+      # but Settings still requires SECRET_KEY to exist before the app imports.
+      SECRET_KEY: ci-only-secret-not-used-anywhere-real
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # PyMuPDF shells out to the Tesseract binary for scanned PDFs. Without it
+      # the OCR tests skip rather than fail — install it so they actually run.
+      - name: Install Tesseract
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      # The embedding and reranking models are ~500MB and are downloaded on first
+      # use. Cached on the requirements hash so a normal run never re-downloads.
+      - name: Cache Hugging Face models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+
+      # Split so a plain logic break is reported in seconds, without waiting on
+      # the model-loading tier — but both tiers must pass.
+      - name: Fast tests
+        run: pytest -m "not slow"
+
+      - name: Model-backed tests
+        run: pytest -m "slow"
+
+      # Cheap and catches a mislabelled eval span, which would otherwise sit
+      # there scoring as a permanent miss. Needs no models.
+      - name: Validate eval labels
+        run: |
+          python -m backend.eval --build-corpus
+          python -m backend.eval --check
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      # `npm run build` is `tsc -b && vite build` — the type check is the test.
+      - run: npm run build

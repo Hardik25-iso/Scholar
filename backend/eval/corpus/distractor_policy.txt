@@ -1,0 +1,114 @@
+INFORMATION SECURITY POLICY - REVISION 6
+===PAGE===
+1. PURPOSE AND SCOPE
+
+1.1 This policy sets out the minimum information security controls applicable to
+all employees, contractors and third parties who access company systems or
+handle company data.
+
+1.2 It applies to all environments, including production, staging, development
+and any personal device enrolled in the mobile device management programme.
+
+1.3 Breach of this policy may result in disciplinary action up to and including
+dismissal, and for third parties, termination of the engagement.
+
+2. ACCESS CONTROL
+
+2.1 Access is granted on the principle of least privilege. Each request must be
+approved by the data owner and is reviewed quarterly.
+
+2.2 Multi-factor authentication is mandatory for all remote access, all
+administrative accounts, and any system holding personal data.
+
+2.3 Shared accounts are prohibited except where a documented technical
+limitation exists and a compensating control has been approved by the Chief
+Information Security Officer.
+
+2.4 Accounts of departing staff must be disabled within four (4) hours of the
+termination of employment being confirmed to IT.
+
+3. PASSWORD AND CREDENTIAL STANDARDS
+
+3.1 Passwords must be at least fourteen (14) characters. Complexity rules are
+not imposed; length and uniqueness are preferred.
+
+3.2 Credentials must never be transmitted over email, chat or ticketing systems.
+The approved secrets manager is the only permitted channel.
+
+3.3 Service account credentials must be rotated at least every one hundred and
+eighty (180) days, and immediately on suspicion of compromise.
+===PAGE===
+4. DATA CLASSIFICATION
+
+4.1 All data is classified as Public, Internal, Confidential or Restricted.
+Where classification is unclear, data is treated as Confidential until the data
+owner determines otherwise.
+
+4.2 Restricted data may not leave approved systems and may not be copied to
+removable media under any circumstances.
+
+4.3 Confidential and Restricted data at rest must be encrypted using AES-256 or
+an equivalent approved algorithm. Data in transit must use TLS 1.2 or above.
+
+5. INCIDENT RESPONSE
+
+5.1 All suspected security incidents must be reported to the security team
+within one (1) hour of discovery, regardless of the hour or day.
+
+5.2 The security team triages every report within two (2) hours and assigns a
+severity between 1 and 4.
+
+5.3 A Severity 1 incident triggers the major incident process, including
+notification of the executive team within thirty (30) minutes of classification.
+
+5.4 Where an incident involves personal data, the Data Protection Officer
+assesses notifiability and, where required, notifies the supervisory authority
+within seventy-two (72) hours of the organisation becoming aware.
+
+5.5 A written post-incident review is produced within ten (10) business days for
+every Severity 1 and Severity 2 incident.
+
+6. VULNERABILITY MANAGEMENT
+
+6.1 Internet-facing systems are scanned weekly. Internal systems are scanned
+monthly.
+
+6.2 Critical vulnerabilities must be remediated within seven (7) days, high
+within thirty (30) days, medium within ninety (90) days.
+===PAGE===
+7. BUSINESS CONTINUITY
+
+7.1 Backups of all production data are taken daily and retained for thirty-five
+(35) days, with a monthly backup retained for thirteen (13) months.
+
+7.2 Restore testing is performed at least quarterly. A restore test that fails
+is treated as a Severity 2 incident.
+
+7.3 The recovery time objective for tier-one systems is four (4) hours and the
+recovery point objective is fifteen (15) minutes.
+
+8. THIRD PARTY AND SUPPLIER MANAGEMENT
+
+8.1 Every supplier with access to Confidential or Restricted data must complete
+a security assessment before contract signature and annually thereafter.
+
+8.2 Contracts with such suppliers must include a right to audit, a breach
+notification obligation of no more than twenty-four (24) hours, and a
+requirement to delete or return data on termination.
+
+9. TRAINING AND AWARENESS
+
+9.1 All staff complete security awareness training on joining and annually
+thereafter. Completion rates are reported to the audit committee.
+
+9.2 Simulated phishing exercises are run at least six (6) times per year. Staff
+failing three exercises in a rolling twelve month period are enrolled in
+additional training.
+
+10. POLICY REVIEW
+
+10.1 This policy is reviewed annually, or sooner following a material incident
+or a significant change in the regulatory environment.
+
+10.2 Revision 6 was approved by the board on 11 November 2024 and supersedes
+Revision 5 in its entirety.

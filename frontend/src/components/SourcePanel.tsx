@@ -68,8 +68,11 @@ export default function SourcePanel({ citations, activeCitation, onCite, onOpen 
               <span className="min-w-0 flex-1 truncate font-mono text-[0.66rem] text-graphite">
                 {c.paper_id.replace(/_/g, " ")}
               </span>
-              <span className="inline-flex shrink-0 items-center gap-1 font-mono text-[0.62rem] text-faint">
-                p.{c.page + 1}
+              {/* The backend's locator, not "p.N": only a PDF has pages, and a
+                  slide or worksheet labelled as one is a citation that misleads. */}
+              <span className="inline-flex shrink-0 items-center gap-1 font-mono text-[0.62rem] text-faint"
+                    title={`characters ${c.char_start}–${c.char_end} of this ${c.unit}`}>
+                {c.locator}
                 {onOpen && <ExternalIcon className="h-[0.7rem] w-[0.7rem] text-accent" />}
               </span>
             </div>

@@ -13,23 +13,30 @@ from the library cache rather than a single global.
 Run:  uvicorn backend.api:app --reload   (use the .venv interpreter)
 """
 import json
+import logging
 import threading
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from sqlmodel import Session
 
-from backend import library
-from backend.auth import get_current_user, router as auth_router
+from backend import audit, generator, library
+from backend.audit_routes import router as audit_router
+from backend.auth import get_current_user, require_csrf, router as auth_router
+from backend.search import shortlist
 from backend.config import settings
-from backend.db import init_db
+from backend.db import get_session, init_db
 from backend.db_models import User
 from backend.embedder import embed
 from backend.generator import condense_question, generate, stream_answer, warm_llm
 from backend.models import Answer, AskRequest, Citation
 from backend.papers import router as papers_router
+from backend.ratelimit import ask_limiter
 from backend.reranker import Reranker
+
+log = logging.getLogger(__name__)
 
 # The reranker model is heavy and stateless, so load it once and share it. The
 # retriever is now PER USER (each user has their own index), so it is resolved
@@ -50,16 +57,30 @@ def _warm_models() -> None:
             Citation(paper_id="_", page=0, chunk_index=0, score=0.0, text="warm up passage")
         ], top_k=1)
         warm_llm()                                               # Ollama gemma3:4b
-        print("[warm] models ready", flush=True)
+        log.info("models ready")
     except Exception as exc:  # e.g. Ollama not running
-        print(f"[warm] skipped (non-fatal): {exc}", flush=True)
+        log.warning("model warm-up skipped (non-fatal): %s", exc)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: create DB tables, then warm models in the background so startup
     # stays instant while the first-request cold-load happens ahead of time.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S%z",
+    )
     init_db()
+    # Loud about the one misconfiguration that destroys data without an error:
+    # the default library location lives inside the source tree.
+    if not settings.data_root:
+        log.warning(
+            "DATA_ROOT is unset — user libraries live in the source tree at %s. "
+            "A redeploy that replaces the source will DELETE every library. "
+            "Set DATA_ROOT to a mounted volume before serving real users.",
+            library.DATA_ROOT,
+        )
     threading.Thread(target=_warm_models, name="warm", daemon=True).start()
     yield
 
@@ -79,6 +100,7 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(papers_router)
+app.include_router(audit_router)
 
 
 @app.get("/health")
@@ -89,14 +111,43 @@ def health() -> dict[str, str]:
 # Plain `def` (not async): generate() calls a blocking LLM. FastAPI runs sync
 # endpoints in a threadpool, so a slow answer doesn't block other requests.
 # Auth-protected and scoped: a user can only ever query their OWN papers.
-@app.post("/ask", response_model=Answer)
-def ask(request: AskRequest, user: User = Depends(get_current_user)) -> Answer:
+#
+# require_csrf, like every other POST: /ask reads no state but it is the most
+# EXPENSIVE route in the app (retrieval + reranking + full LLM generation). The
+# cookie alone would let any site drive a logged-in user's browser into an
+# unbounded compute — and a billed one, once generation moves to a paid API.
+@app.post("/ask", response_model=Answer, dependencies=[Depends(require_csrf)])
+def ask(
+    request: AskRequest,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> Answer:
+    ask_limiter.check(str(user.id))
     query, citations = _resolve_and_retrieve(user.id, request)
-    return generate(query, citations)
+    answer = generate(query, citations)
+    _record(session, user.id, request, query, answer)
+    return answer
+
+
+def _record(session: Session, user_id: int, request: AskRequest, query: str, answer: Answer) -> None:
+    """Log the served answer with its evidence. Never raises — see audit.record."""
+    audit.record(
+        session, user_id, request, query, answer,
+        index_dir=library.user_index_dir(user_id),
+        model=generator.MODEL,
+        temperature=generator.TEMPERATURE,
+    )
 
 
 def _resolve_and_retrieve(user_id: int, request: AskRequest) -> tuple[str, list[Citation]]:
     """Condense a follow-up into a standalone query, then run stage 1+2 on it.
+
+    Stage 1 is HYBRID: the dense retriever finds passages that mean the right
+    thing, the lexical index finds passages containing the right tokens, and the
+    two ranked lists are fused. Neither alone covers what this product is asked —
+    "how does the renewal work" needs meaning, "Section 7.2" needs the literal
+    string. Stage 2 (the cross-encoder) is unchanged; it just receives a better
+    shortlist than either retriever produces on its own.
 
     Returns (query, citations): `query` is what retrieval + generation should use
     (the condensed standalone question for a follow-up, else the original), and
@@ -106,12 +157,18 @@ def _resolve_and_retrieve(user_id: int, request: AskRequest) -> tuple[str, list[
     if retriever is None:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            "no papers indexed yet — upload a PDF first",
+            "no documents indexed yet — upload one first",
         )
     # For a follow-up, rewrite it to stand alone so retrieval doesn't choke on
     # pronouns ("what about it?"). No-op when there's no history.
     query = condense_question(request.question, request.history)
-    candidates = retriever.retrieve(query, k=request.candidates)
+    candidates = shortlist(
+        query,
+        library.user_index_dir(user_id),
+        retriever,
+        k=request.candidates,
+        papers=request.papers,
+    )
     citations = _reranker.rerank(query, candidates, top_k=request.k)
     return query, citations
 
@@ -122,18 +179,31 @@ def _resolve_and_retrieve(user_id: int, request: AskRequest) -> tuple[str, list[
 # Transport is NDJSON (one JSON object per line): a citations line, then token
 # lines, then a done line (or an error line if generation fails mid-stream).
 # Sync `def` so Starlette iterates the blocking Ollama generator in a threadpool.
-@app.post("/ask/stream")
-def ask_stream(request: AskRequest, user: User = Depends(get_current_user)) -> StreamingResponse:
+@app.post("/ask/stream", dependencies=[Depends(require_csrf)])
+def ask_stream(
+    request: AskRequest,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> StreamingResponse:
+    ask_limiter.check(str(user.id))
     query, citations = _resolve_and_retrieve(user.id, request)
 
     def ndjson():
         yield json.dumps({"type": "citations",
                           "citations": [c.model_dump() for c in citations]}) + "\n"
+        parts: list[str] = []
         try:
             for delta in stream_answer(query, citations):
+                parts.append(delta)
                 yield json.dumps({"type": "token", "text": delta}) + "\n"
             yield json.dumps({"type": "done"}) + "\n"
         except Exception as exc:  # surface a mid-stream failure to the client
             yield json.dumps({"type": "error", "detail": str(exc)}) + "\n"
+            return  # a failed generation is not an answer, so do not log one
+        # Logged only after a clean finish, and with the text actually sent —
+        # reassembled from the deltas rather than regenerated, so the audit
+        # record is what the user saw, not a second guess at it.
+        _record(session, user.id, request, query,
+                Answer(question=query, answer="".join(parts), citations=citations))
 
     return StreamingResponse(ndjson(), media_type="application/x-ndjson")

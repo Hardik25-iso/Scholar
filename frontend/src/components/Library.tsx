@@ -41,7 +41,15 @@ export default function Library({ papers, loading, uploading, error, onUpload, o
       </div>
 
       {/* upload dropzone */}
-      <input ref={fileRef} type="file" accept="application/pdf,.pdf" hidden onChange={onFile} />
+      {/* Keep in sync with parser.SUPPORTED_EXTENSIONS — the backend gates on the
+          extension, so the picker should offer exactly what it will accept. */}
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".pdf,.docx,.pptx,.xlsx,.txt,.md"
+        hidden
+        onChange={onFile}
+      />
       <button
         onClick={pick}
         disabled={uploading}
@@ -51,9 +59,9 @@ export default function Library({ papers, loading, uploading, error, onUpload, o
                    disabled:cursor-wait disabled:opacity-70"
       >
         <UploadIcon className="mx-auto mb-2 h-[1.6rem] w-[1.6rem] text-accent" />
-        <b className="block font-sans text-[0.82rem] font-semibold">Drop a PDF to add it</b>
+        <b className="block font-sans text-[0.82rem] font-semibold">Drop a document to add it</b>
         <span className="mt-0.5 block font-mono text-[0.6rem] tracking-[0.04em] text-faint">
-          or click to browse · max 20 MB
+          pdf · docx · pptx · xlsx · txt · md — max 20 MB
         </span>
       </button>
       {error && <p className="mx-4 mt-2 font-mono text-[0.62rem] leading-relaxed text-accent">{error}</p>}
@@ -78,7 +86,7 @@ export default function Library({ papers, loading, uploading, error, onUpload, o
           <p className="px-3 py-3 font-mono text-[0.62rem] text-faint">loading…</p>
         ) : papers.length === 0 && !uploading ? (
           <p className="px-3 py-3 font-mono text-[0.62rem] leading-relaxed text-faint">
-            No papers yet. Upload a PDF to start asking grounded questions.
+            No documents yet. Upload one to start asking grounded questions.
           </p>
         ) : (
           papers.map((p, i) => (

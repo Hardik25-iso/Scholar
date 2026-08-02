@@ -1,0 +1,4 @@
+# Test-only dependencies. Kept out of requirements.txt so a deployment does not
+# install a test runner. Everything the suite needs beyond this (httpx, for
+# starlette's TestClient) already ships as a FastAPI dependency.
+pytest>=8.0,<10.0

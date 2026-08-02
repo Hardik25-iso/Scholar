@@ -1,0 +1,127 @@
+SOFTWARE LICENCE AND SUPPORT AGREEMENT
+===PAGE===
+This Software Licence and Support Agreement (the "Agreement") is made on
+2 September 2023 (the "Commencement Date") between Halcyon Systems B.V., a
+company incorporated in the Netherlands with registration number 61204877, whose
+registered office is at Keizersgracht 281, 1016 ED Amsterdam ("Licensor"), and
+Bridgewater Mutual Insurance plc, incorporated in England and Wales with company
+number 04771930, whose registered office is at 8 Fenchurch Place, London EC3M
+4AJ ("Licensee").
+
+1. GRANT OF LICENCE
+
+1.1 Licensor grants Licensee a non-exclusive, non-transferable licence to use
+the Software in object code form for its internal business purposes only.
+
+1.2 The licence covers up to two hundred and fifty (250) named users. Additional
+users may be added at the per-user rate set out in Schedule B.
+
+1.3 Licensee shall not reverse engineer, decompile or disassemble the Software
+except to the extent that such restriction is prohibited by applicable law.
+
+2. TERM
+
+2.1 This Agreement runs for an initial period of twenty-four (24) months from
+the Commencement Date.
+
+2.2 Thereafter it continues on a rolling annual basis unless terminated by
+either party on not less than one hundred and twenty (120) days written notice
+expiring on an anniversary of the Commencement Date.
+===PAGE===
+3. CHARGES
+
+3.1 The annual licence charge is EUR 315,000, invoiced annually in advance.
+
+3.2 Support and maintenance is charged at twenty-two percent (22%) of the
+then-current licence charge and is not optional during the initial period.
+
+3.3 Licensor may adjust the licence charge annually by no more than the increase
+in the Eurozone Harmonised Index of Consumer Prices, subject to a floor of zero
+and a ceiling of five percent (5%).
+
+3.4 Charges are exclusive of VAT. Invoices are payable within forty-five (45)
+days. Late payment attracts interest at two percent (2%) per month.
+
+4. SUPPORT LEVELS
+
+4.1 Licensor shall respond to a Severity 1 incident within one (1) hour and
+shall provide a workaround or fix within eight (8) hours.
+
+4.2 Severity 2 incidents carry a four (4) hour response and a two (2) business
+day resolution target.
+
+4.3 Licensor shall maintain production availability of at least 99.9% measured
+over a rolling ninety (90) day window, excluding agreed maintenance windows.
+
+4.4 Failure to meet the availability target entitles Licensee to a credit of ten
+percent (10%) of the quarterly support charge per incident, capped at fifty
+percent (50%) of that charge in any quarter.
+===PAGE===
+5. INTELLECTUAL PROPERTY
+
+5.1 All intellectual property rights in the Software remain vested in Licensor.
+Nothing in this Agreement transfers ownership of any such rights.
+
+5.2 Licensor shall indemnify Licensee against any claim that the Software
+infringes a third party's intellectual property rights, provided Licensee
+notifies Licensor promptly and does not admit liability.
+
+6. WARRANTIES
+
+6.1 Licensor warrants that the Software will perform substantially in accordance
+with the Documentation for ninety (90) days following the Commencement Date.
+
+6.2 Licensor does not warrant that operation of the Software will be
+uninterrupted or error-free.
+
+7. GENERAL PROVISIONS
+
+7.1 Entire Agreement. This Agreement, together with its Schedules, constitutes
+the entire agreement between the parties and supersedes all prior negotiations,
+representations and understandings, whether written or oral.
+
+7.2 Assignment. Neither party may assign, novate or otherwise transfer any of
+its rights or obligations under this Agreement without the prior written consent
+of the other party, such consent not to be unreasonably withheld or delayed,
+save that either party may assign to an affiliate or to a successor in title to
+substantially the whole of its business on written notice.
+
+7.3 Waiver. No failure or delay by either party in exercising any right under
+this Agreement constitutes a waiver of that right.
+
+7.4 Severance. If any provision of this Agreement is held to be invalid or
+unenforceable, the remaining provisions continue in full force.
+===PAGE===
+8. LIMITATION OF LIABILITY
+
+8.1 Neither party excludes liability for death or personal injury caused by
+negligence, or for fraud or fraudulent misrepresentation.
+
+8.2 Subject to clause 8.1, each party's aggregate liability in any twelve month
+period shall not exceed one hundred and fifty percent (150%) of the charges paid
+or payable in that period.
+
+8.3 Neither party is liable for loss of profit, loss of anticipated savings,
+loss of business opportunity or any indirect or consequential loss.
+
+9. TERMINATION
+
+9.1 Either party may terminate immediately on written notice if the other
+becomes insolvent, enters administration, or has a receiver appointed.
+
+9.2 On expiry or termination, Licensee shall cease all use of the Software and
+delete all copies within thirty (30) days, certifying deletion in writing.
+
+10. GOVERNING LAW AND DISPUTES
+
+10.1 This Agreement is governed by Dutch law.
+
+10.2 Any dispute shall be referred to arbitration in Amsterdam under the rules
+of the Netherlands Arbitration Institute, before a single arbitrator, conducted
+in English.
+
+SIGNED for Halcyon Systems B.V. by Marijke van Oosterhout, Managing Director,
+on 2 September 2023.
+
+SIGNED for Bridgewater Mutual Insurance plc by Elliot Farnsworth, Group Chief
+Information Officer, on 2 September 2023.

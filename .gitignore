@@ -6,6 +6,11 @@ __pycache__/
 # Data (FAISS indexes, per-user stores, SQLite DB) — never commit
 data/
 
+# Eval corpus PDFs: sample_agreement.pdf is generated from the committed .txt
+# (python -m backend.eval --build-corpus) and rag_paper.pdf is downloaded.
+# Neither belongs in git — see backend/eval/corpus/README.md.
+backend/eval/corpus/*.pdf
+
 # Secrets — never commit
 .env
 

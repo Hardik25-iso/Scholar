@@ -61,6 +61,14 @@ class Settings(BaseSettings):
     cookie_secure: bool = False
     cookie_samesite: str = "lax"
 
+    # Query-expansion strategy: "none", "prf" or "hyde".
+    # Default "none" because PRF was built, measured and REJECTED — it made
+    # every category worse and did not move the class it targeted (see
+    # docs/04-pmf-roadmap.md). "hyde" costs an LLM call per question and makes
+    # retrieval non-deterministic, which is in tension with the audit log's
+    # reproducibility claim, so it is opt-in rather than default.
+    query_expansion: str = "none"
+
     # Whether to OCR scanned PDFs at all. OCR is slow and CPU-hungry, so a small
     # instance may reasonably refuse it — and an explicit switch is the only
     # honest way to express "off". Clearing tessdata_prefix does NOT disable it:

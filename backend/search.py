@@ -8,11 +8,15 @@ a guess about the real thing.
     dense  (embeddings)  -> what the passage MEANS
     sparse (FTS5 bm25)   -> what tokens the passage CONTAINS
     RRF                  -> one ranked list from the two
+    expansion            -> a second pass in the answer's own vocabulary
     diversity cap        -> stop one document monopolising the shortlist
+
+Returns the shortlist AND the query that produced it, because expansion changes
+the query and the reranker must see the same one — see shortlist().
 """
 from pathlib import Path
 
-from backend import lexical
+from backend import expansion, lexical
 from backend.fusion import reciprocal_rank_fusion
 from backend.models import Citation
 from backend.retriever import Retriever
@@ -49,6 +53,21 @@ def cap_per_document(citations: list[Citation], limit: int, ratio: float = DIVER
     return (kept + demoted)[:limit]
 
 
+def _retrieve(
+    query: str, store_dir: Path, retriever: Retriever, depth: int, dense_only: bool
+) -> list[Citation]:
+    """One retrieval pass: dense, plus lexical unless disabled, fused."""
+    dense = retriever.retrieve(query, k=depth)
+    if dense_only:
+        return dense
+    # Lexical hits know only (paper_id, chunk_index), and RRF keeps whichever
+    # retriever ranked a passage best — so a lexically-found passage would
+    # reach the caller missing its faiss_id and char span. Hydrate before
+    # fusing, or the audit trail silently depends on which retriever won.
+    sparse = retriever.hydrate(lexical.search(query, store_dir, k=depth))
+    return reciprocal_rank_fusion([dense, sparse])
+
+
 def shortlist(
     query: str,
     store_dir: str | Path,
@@ -56,7 +75,8 @@ def shortlist(
     k: int = 20,
     dense_only: bool = False,
     papers: list[str] | None = None,
-) -> list[Citation]:
+    expansion_mode: str = "none",
+) -> tuple[list[Citation], str]:
     """Return up to k candidate passages for `query`, best first.
 
     `papers` restricts the search to those paper_ids — the "ask only these
@@ -74,19 +94,32 @@ def shortlist(
     # leave the reranker with far fewer passages than it was asked for.
     depth = k * 3 if papers else k
 
-    dense = retriever.retrieve(query, k=depth)
-    if dense_only:
-        candidates = dense
+    candidates = _retrieve(query, store_dir, retriever, depth, dense_only)
+    effective_query = query
+
+    # Expansion runs a SECOND pass and fuses, so a bad expansion can only add
+    # candidates, never remove a good one. Both modes are measured, and the
+    # default is "none" because PRF was measured and rejected — see the roadmap.
+    if expansion_mode == "prf":
+        effective_query, terms = expansion.expand(query, candidates)
+        expanded = bool(terms)
+    elif expansion_mode == "hyde":
+        effective_query = f"{query} {expansion.hypothetical_answer(query)}"
+        expanded = True
     else:
-        # Lexical hits know only (paper_id, chunk_index), and RRF keeps whichever
-        # retriever ranked a passage best — so a lexically-found passage would
-        # reach the caller missing its faiss_id and char span. Hydrate before
-        # fusing, or the audit trail silently depends on which retriever won.
-        sparse = retriever.hydrate(lexical.search(query, store_dir, k=depth))
-        candidates = reciprocal_rank_fusion([dense, sparse])
+        expanded = False
+
+    if expanded:
+        second = _retrieve(effective_query, store_dir, retriever, depth, dense_only)
+        candidates = reciprocal_rank_fusion([candidates, second])
 
     if papers is not None:
         allowed = set(papers)
         candidates = [c for c in candidates if c.paper_id in allowed]
 
-    return cap_per_document(candidates, limit=k)
+    # The expanded query is returned so the CALLER can rerank with it. That
+    # matters more than it sounds: the measured failure was the cross-encoder
+    # discarding a passage already retrieved at rank 2, because the question as
+    # asked shared no vocabulary with it. Fixing stage 1 alone would not have
+    # fixed that question.
+    return cap_per_document(candidates, limit=k), effective_query

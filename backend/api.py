@@ -172,14 +172,20 @@ def _resolve_and_retrieve(workspace_id: int, request: AskRequest) -> tuple[str, 
     # For a follow-up, rewrite it to stand alone so retrieval doesn't choke on
     # pronouns ("what about it?"). No-op when there's no history.
     query = condense_question(request.question, request.history)
-    candidates = shortlist(
+    candidates, retrieval_query = shortlist(
         query,
         library.workspace_index_dir(workspace_id),
         retriever,
         k=request.candidates,
         papers=request.papers,
+        expansion_mode=settings.query_expansion,
     )
-    citations = _reranker.rerank(query, candidates, top_k=request.k)
+    # Reranked with the EXPANDED query, not the original. The measured failure
+    # was the cross-encoder discarding a correct passage that retrieval had
+    # already found, because the question shared no vocabulary with it.
+    # Generation still receives the user's own question — `query` — since the
+    # expansion terms are a retrieval device, not part of what was asked.
+    citations = _reranker.rerank(retrieval_query, candidates, top_k=request.k)
     return query, citations
 
 

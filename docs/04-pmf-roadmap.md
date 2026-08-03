@@ -609,6 +609,75 @@ and the embedder does not bridge the gap either. These were sitting inside the `
 dragging it down and hiding the fact that everything else in it now scores 100%.
 
 **The next retrieval work is query expansion, not an agent.** It addresses the only class at 0%.
+That work was then done — see below.
+
+---
+
+### Query expansion — PRF built and REJECTED, HyDE works but is opt-in
+
+Two strategies were implemented and measured against the same corpus. `--expansion none|prf|hyde`
+makes this reproducible.
+
+| | none | prf | **hyde** |
+|---|---|---|---|
+| **hit@5** | 94.1% | 92.2% | **98.0%** |
+| MRR | **0.822** | 0.771 | 0.805 |
+| hit@1 | **72.5%** | 66.7% | 70.6% |
+| misses | 3 | 4 | **1** |
+| — `vocabulary` (the target) | 0% | **0%** | **50%** |
+| — `comparative` | 80% | 60% | **100%** |
+| — `table` MRR | **0.875** | 0.667 | 0.667 |
+
+#### Why pseudo-relevance feedback failed — and it is not a tuning problem
+
+PRF was the *right-looking* choice: deterministic, no dependency, no LLM call, and aimed squarely at
+vocabulary mismatch. It made every category worse and moved the target class **not at all**.
+
+The diagnosis is structural. PRF mines expansion terms from the top few passages of the first
+retrieval pass, assuming that pass is roughly right and merely needs richer vocabulary. Printing the
+feedback set for the failing questions shows the assumption is false here:
+
+```
+Q: What is the uptime commitment and what happens if it is missed?
+   feedback 1: sample_agreement#4  '8. TERMINATION...'
+   feedback 2: sample_agreement#2  '3. FEES AND PAYMENT...'
+   feedback 3: market_brief_2col#0 'QUARTERLY MARKET BRIEF...'
+   TERMS: ['law', 'next', 'thirty', 'governed', 'governing', 'signed']
+```
+
+The passage that answers the question is not in the feedback set — **because of the vocabulary gap
+PRF was brought in to fix.** The first pass is wrong precisely for the reason expansion was needed,
+so expansion confidently makes it wronger. No amount of tuning depth or term count escapes that
+circularity: PRF can enrich a nearly-right query, and cannot rescue a wrong one.
+
+Kept in the tree at `expansion_mode="prf"` rather than deleted, because "did you try PRF?" is a
+question that will be asked again, and a measured answer beats an absence.
+
+#### Why HyDE works, and what it costs
+
+HyDE asks the LLM what the answer would *look* like and searches for that. It has the outside
+knowledge PRF lacks — that a service level is written as *availability*, that an optimiser is named
+*Adam*:
+
+```
+Q: What optimizer is used to train the model?
+   -> "AdamW was employed for the optimization process."
+```
+
+It cuts misses from 3 to 1, takes `comparative` to 100%, and halves the `vocabulary` failures.
+
+**It is off by default anyway**, for a reason specific to this product rather than a general
+preference: the audit log promises a logged answer can be reproduced against the same index. An LLM
+in the retrieval path makes retrieval non-deterministic, so the central claim quietly weakens.
+Temperature is 0, which makes it *nearly* reproducible, and "nearly" is not what the log says.
+
+The precision cost is also real and should not be waved past: MRR 0.822 → 0.805, hit@1 72.5% →
+70.6%, and `table` MRR 0.875 → 0.667. HyDE trades ranking precision for recall. Recall is the more
+valuable of the two here — a passage the model never sees cannot be used — but it is a trade.
+
+**To turn it on honestly:** set `QUERY_EXPANSION=hyde`, *and* record the generated hypothetical in
+`AnswerLog` (a new column) so the audit trail shows exactly what was searched. Without that second
+half, enabling it makes the reproducibility claim untrue. That column is the remaining work.
 
 #### Two mistakes this investigation corrected
 

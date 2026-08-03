@@ -471,7 +471,80 @@ document indexes without timing out.
 
 ---
 
-### Phase 5 — Teams *(2 weeks)*
+### Phase 5 — Teams *(2 weeks)* — **DONE**
+
+The highest-risk step in this roadmap, gated behind Phase 0's tests and Phase 4's backups
+specifically so it could be attempted safely.
+
+- **Schema — DONE.** `Workspace`, `Membership(user, workspace, role)`, `Invitation`. `Paper` and
+  `AnswerLog` gain `workspace_id`; `User` gains `current_workspace_id`. A personal library is an
+  ordinary workspace flagged `is_personal`, so there is exactly **one** storage, retrieval and
+  authorisation path rather than two that drift apart.
+- **Storage migration — DONE.** `data/users/<user_id>/` → `data/workspaces/<workspace_id>/`.
+- **Authorisation — DONE.** Ownership checks became membership checks, resolved by a single
+  `get_current_workspace` dependency. Scope comes from the user's active workspace, **not** a
+  request parameter, so no route can forget to scope itself and no client can point itself at
+  another library by editing an id. Absence of membership is 404, never 403.
+- **Invitations and roles — DONE.** Two roles, `owner` and `member`, because there is exactly one
+  privileged action (managing who else is in the workspace); a finer grid would invent distinctions
+  nothing enforces.
+
+#### Three deliberate authorisation choices
+
+1. **Deletion is narrower than reading.** Everyone in a workspace sees every document, but only the
+   uploader or an owner can destroy one. Otherwise any member could silently delete a colleague's
+   work from a shared library, and there is no undo.
+2. **An invitation is not a bearer token.** The invited email must match the accepting account —
+   otherwise a forwarded link is a public join link wearing an invitation's clothes.
+3. **The last owner cannot be removed.** A workspace with no owner has documents nobody can manage
+   and members nobody can add, recoverable only by database surgery.
+
+#### The migration, and what rehearsing it found
+
+Built to the rules that make a migration survivable: idempotent, `--dry-run` first, copy-verify-then-
+remove (an interruption leaves both copies, never neither), and refusal to run on real data without
+`--i-have-a-backup`. Never a recursive delete of the legacy root — an unaccounted-for directory is
+reported and left alone.
+
+**Rehearsing it against a copy of the real database found three bugs, all in the safety machinery
+itself.** None would have appeared in unit tests, because all three only occur on a *pre-migration*
+database:
+
+| Bug | Why it mattered |
+|---|---|
+| `_anything_at_risk()` queried `Paper` through the ORM | The backup gate crashed on exactly the database it exists to protect — every ORM query names `workspace_id`, which does not exist yet. Now raw SQL. |
+| `backup create` reported **"0 libraries"** | It only looked at the new workspace path, so the backup you are *told to take before migrating* contained none of the data at risk. Now captures both roots. |
+| `--dry-run` crashed | The one command someone runs when they are nervous was the one that could not run. Now reads through raw SQL. |
+
+Verified end to end on a copy of the real data: backup → dry run → migrate → serve. Six accounts
+migrated, libraries moved under their workspace ids, files byte-identical, and the migrated library
+still served through the API.
+
+#### A test isolation breach, found and fixed
+
+`conftest.py` redirected `library.DATA_ROOT` but not the newly-added `LEGACY_DATA_ROOT`, so the
+migration tests wrote fixture directories into the developer's **real** `data/users`. Four stray
+files, no damage to existing data (verified by content and by an unchanged database hash), removed.
+The guard now asserts over *every* writable root, so the next one added fails loudly instead of
+being noticed later as stray files.
+
+**Acceptance — met.** Two users in one workspace share a library and both can retrieve from it; a
+non-member gets 404 and **zero leaked passages**; the existing isolation tests still pass, extended
+to workspaces. 251 tests green; 27/27 through a real server against migrated data.
+
+#### Not done
+
+- **No workspace UI.** The API client is typed and complete (`listWorkspaces`, `createWorkspace`,
+  `activateWorkspace`, `inviteMember`, …), but there is no switcher in the interface yet, so teams
+  are currently reachable only through the API.
+- **Invitation delivery** shares the password-reset gap: no mail provider, so the token is logged
+  and also returned to the *inviter* to pass on by hand. That return value is a stated stopgap and
+  must be removed the moment mail is wired up — a token in an API response is a credential in a
+  place credentials do not belong.
+
+---
+
+### Phase 5 — original plan *(superseded by the section above)*
 
 - **Schema** — `Workspace`, `Membership(user, workspace, role)`; `Paper` gains `workspace_id`.
 - **Storage migration** — `data/users/<id>/` → `data/workspaces/<id>/`, with a migration for

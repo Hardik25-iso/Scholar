@@ -28,13 +28,15 @@ from backend.auth import get_current_user, require_csrf, router as auth_router
 from backend.search import shortlist
 from backend.config import settings
 from backend.db import get_session, init_db
-from backend.db_models import User
+from backend.db_models import User, Workspace
 from backend.embedder import embed
 from backend.generator import condense_question, generate, stream_answer, warm_llm
 from backend.models import Answer, AskRequest, Citation
 from backend.papers import router as papers_router
 from backend.ratelimit import ask_limiter
 from backend.reranker import Reranker
+from backend.workspace_routes import router as workspace_router
+from backend.workspaces import get_current_workspace
 
 log = logging.getLogger(__name__)
 
@@ -101,6 +103,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(papers_router)
 app.include_router(audit_router)
+app.include_router(workspace_router)
 
 
 @app.get("/health")
@@ -120,26 +123,33 @@ def health() -> dict[str, str]:
 def ask(
     request: AskRequest,
     user: User = Depends(get_current_user),
+    workspace: Workspace = Depends(get_current_workspace),
     session: Session = Depends(get_session),
 ) -> Answer:
     ask_limiter.check(str(user.id))
-    query, citations = _resolve_and_retrieve(user.id, request)
+    query, citations = _resolve_and_retrieve(workspace.id, request)
     answer = generate(query, citations)
-    _record(session, user.id, request, query, answer)
+    _record(session, user.id, workspace.id, request, query, answer)
     return answer
 
 
-def _record(session: Session, user_id: int, request: AskRequest, query: str, answer: Answer) -> None:
-    """Log the served answer with its evidence. Never raises — see audit.record."""
+def _record(session: Session, user_id: int, workspace_id: int,
+            request: AskRequest, query: str, answer: Answer) -> None:
+    """Log the served answer with its evidence. Never raises — see audit.record.
+
+    Both ids are kept: who asked, and which library they asked. In a shared
+    workspace those are different questions, and an audit trail that could only
+    answer one of them would be worth much less.
+    """
     audit.record(
-        session, user_id, request, query, answer,
-        index_dir=library.user_index_dir(user_id),
+        session, user_id, workspace_id, request, query, answer,
+        index_dir=library.workspace_index_dir(workspace_id),
         model=generator.MODEL,
         temperature=generator.TEMPERATURE,
     )
 
 
-def _resolve_and_retrieve(user_id: int, request: AskRequest) -> tuple[str, list[Citation]]:
+def _resolve_and_retrieve(workspace_id: int, request: AskRequest) -> tuple[str, list[Citation]]:
     """Condense a follow-up into a standalone query, then run stage 1+2 on it.
 
     Stage 1 is HYBRID: the dense retriever finds passages that mean the right
@@ -153,7 +163,7 @@ def _resolve_and_retrieve(user_id: int, request: AskRequest) -> tuple[str, list[
     (the condensed standalone question for a follow-up, else the original), and
     `citations` are the reranked sources. Raises 400 if the user has no papers.
     """
-    retriever = library.get_retriever(user_id)
+    retriever = library.get_retriever(workspace_id)
     if retriever is None:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -164,7 +174,7 @@ def _resolve_and_retrieve(user_id: int, request: AskRequest) -> tuple[str, list[
     query = condense_question(request.question, request.history)
     candidates = shortlist(
         query,
-        library.user_index_dir(user_id),
+        library.workspace_index_dir(workspace_id),
         retriever,
         k=request.candidates,
         papers=request.papers,
@@ -183,10 +193,11 @@ def _resolve_and_retrieve(user_id: int, request: AskRequest) -> tuple[str, list[
 def ask_stream(
     request: AskRequest,
     user: User = Depends(get_current_user),
+    workspace: Workspace = Depends(get_current_workspace),
     session: Session = Depends(get_session),
 ) -> StreamingResponse:
     ask_limiter.check(str(user.id))
-    query, citations = _resolve_and_retrieve(user.id, request)
+    query, citations = _resolve_and_retrieve(workspace.id, request)
 
     def ndjson():
         yield json.dumps({"type": "citations",
@@ -203,7 +214,7 @@ def ask_stream(
         # Logged only after a clean finish, and with the text actually sent —
         # reassembled from the deltas rather than regenerated, so the audit
         # record is what the user saw, not a second guess at it.
-        _record(session, user.id, request, query,
+        _record(session, user.id, workspace.id, request, query,
                 Answer(question=query, answer="".join(parts), citations=citations))
 
     return StreamingResponse(ndjson(), media_type="application/x-ndjson")

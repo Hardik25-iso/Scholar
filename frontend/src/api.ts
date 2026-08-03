@@ -25,6 +25,70 @@ export interface Citation {
   char_end: number;
 }
 
+// ——— Workspaces ———
+
+export interface Workspace {
+  id: number;
+  name: string;
+  /** A personal library. Cannot be shared or left. */
+  is_personal: boolean;
+  /** The CALLER's role in it — not a property of the workspace itself. */
+  role: "owner" | "member";
+  /** Whether this is the workspace the caller's requests currently act on. */
+  is_current: boolean;
+  created_at: string;
+}
+
+export interface Member {
+  user_id: number;
+  email: string;
+  role: "owner" | "member";
+  joined_at: string;
+}
+
+export interface CreatedInvitation {
+  id: number;
+  email: string;
+  role: "owner" | "member";
+  expires_at: string;
+  /** Present only while invitation email delivery is unimplemented — the
+   *  inviter passes it on by hand. Disappears once a mail provider is wired up. */
+  token: string;
+}
+
+export function listWorkspaces(): Promise<Workspace[]> {
+  return request<Workspace[]>("/workspaces");
+}
+export function createWorkspace(name: string): Promise<Workspace> {
+  return request<Workspace>("/workspaces", { method: "POST", body: JSON.stringify({ name }) });
+}
+/** Point this account's requests at a different workspace. */
+export function activateWorkspace(id: number): Promise<Workspace> {
+  return request<Workspace>(`/workspaces/${id}/activate`, { method: "POST" });
+}
+export function listMembers(id: number): Promise<Member[]> {
+  return request<Member[]>(`/workspaces/${id}/members`);
+}
+export function inviteMember(
+  id: number,
+  email: string,
+  role: "owner" | "member" = "member",
+): Promise<CreatedInvitation> {
+  return request<CreatedInvitation>(`/workspaces/${id}/invitations`, {
+    method: "POST",
+    body: JSON.stringify({ email, role }),
+  });
+}
+export function removeMember(workspaceId: number, userId: number): Promise<void> {
+  return request<void>(`/workspaces/${workspaceId}/members/${userId}`, { method: "DELETE" });
+}
+export function acceptInvitation(token: string): Promise<Workspace> {
+  return request<Workspace>("/workspaces/accept", {
+    method: "POST",
+    body: JSON.stringify({ token }),
+  });
+}
+
 // ——— Audit trail ———
 
 export interface AnswerLogSummary {

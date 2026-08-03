@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from backend import library
 from backend.parser import ocr_available
-from backend.tests.conftest import csrf
+from backend.tests.conftest import csrf, workspace_id
 
 PDF_TYPE = "application/pdf"
 
@@ -63,19 +63,19 @@ def test_corrupt_pdf_returns_422_not_500(alice: TestClient):
 def test_corrupt_pdf_leaves_no_orphan_on_disk(alice: TestClient):
     """The file is written before indexing, so a failure must roll it back —
     otherwise the upload leaves a file with no matching database row."""
-    user_id = alice.get("/auth/me").json()["id"]
+    ws = workspace_id(alice)
     _upload(alice, "fake.pdf", b"not a real pdf at all")
 
-    papers_dir = library.user_papers_dir(user_id)
+    papers_dir = library.workspace_papers_dir(ws)
     leftovers = list(papers_dir.glob("*.pdf")) if papers_dir.exists() else []
     assert leftovers == [], f"orphaned file(s) left behind: {leftovers}"
     assert alice.get("/papers").json() == []
 
 
 def test_failed_upload_does_not_create_an_index(alice: TestClient):
-    user_id = alice.get("/auth/me").json()["id"]
+    ws = workspace_id(alice)
     _upload(alice, "fake.pdf", b"not a real pdf at all")
-    assert not (library.user_index_dir(user_id) / "index.faiss").exists()
+    assert not (library.workspace_index_dir(ws) / "index.faiss").exists()
 
 
 # ——— real indexing ———
@@ -112,12 +112,12 @@ def test_a_scanned_pdf_indexes_and_is_retrievable(alice: TestClient, scanned_pdf
     used to be rejected outright with 422."""
     from backend.store import load
 
-    user_id = alice.get("/auth/me").json()["id"]
+    ws = workspace_id(alice)
     r = _upload(alice, "signed.pdf", scanned_pdf)
     assert r.status_code == 201, r.text
     assert r.json()["n_chunks"] > 0
 
-    _, chunks = load(library.user_index_dir(user_id))
+    _, chunks = load(library.workspace_index_dir(ws))
     text = " ".join(" ".join(c.text.split()) for c in chunks)
     assert "Force Majeure" in text
 
@@ -154,9 +154,9 @@ def test_markdown_indexes_end_to_end(alice: TestClient):
 def test_uploaded_file_keeps_its_own_extension_on_disk(alice: TestClient, xlsx_bytes: bytes):
     """Storage used to hardcode `.pdf`; a workbook saved under that name would be
     unreadable by anything that trusted the extension — including the browser."""
-    user_id = alice.get("/auth/me").json()["id"]
+    ws = workspace_id(alice)
     _upload(alice, "fees.xlsx", xlsx_bytes)
-    assert [p.name for p in library.user_papers_dir(user_id).glob("*")] == ["fees.xlsx"]
+    assert [p.name for p in library.workspace_papers_dir(ws).glob("*")] == ["fees.xlsx"]
 
 
 @pytest.mark.slow
@@ -174,10 +174,10 @@ def test_office_file_is_served_back_as_a_download(alice: TestClient, xlsx_bytes:
 
 @pytest.mark.slow
 def test_deleting_a_non_pdf_removes_its_file(alice: TestClient, xlsx_bytes: bytes):
-    user_id = alice.get("/auth/me").json()["id"]
+    ws = workspace_id(alice)
     paper_id = _upload(alice, "fees.xlsx", xlsx_bytes).json()["id"]
     assert alice.delete(f"/papers/{paper_id}", headers=csrf(alice)).status_code == 204
-    assert list(library.user_papers_dir(user_id).glob("*")) == []
+    assert list(library.workspace_papers_dir(ws).glob("*")) == []
 
 
 @pytest.mark.slow
@@ -185,9 +185,9 @@ def test_a_table_is_retrievable_with_its_column_labels(alice: TestClient, xlsx_b
     """Serialising tables is only worth doing if the labels survive into a chunk."""
     from backend.store import load
 
-    user_id = alice.get("/auth/me").json()["id"]
+    ws = workspace_id(alice)
     _upload(alice, "fees.xlsx", xlsx_bytes)
-    _, chunks = load(library.user_index_dir(user_id))
+    _, chunks = load(library.workspace_index_dir(ws))
     text = "\n".join(c.text for c in chunks)
     assert "| Tier | Included Seats | Annual Fee |" in text
     assert "| Enterprise | unlimited | 960000 |" in text
@@ -256,15 +256,15 @@ def test_delete_requires_csrf(alice: TestClient, text_pdf: bytes):
 
 @pytest.mark.slow
 def test_delete_removes_the_row_the_file_and_the_index(alice: TestClient, text_pdf: bytes):
-    user_id = alice.get("/auth/me").json()["id"]
+    ws = workspace_id(alice)
     paper_id = _upload(alice, "paper.pdf", text_pdf).json()["id"]
 
     assert alice.delete(f"/papers/{paper_id}", headers=csrf(alice)).status_code == 204
     assert alice.get("/papers").json() == []
     assert alice.get(f"/papers/{paper_id}/file").status_code == 404
-    assert list(library.user_papers_dir(user_id).glob("*.pdf")) == []
+    assert list(library.workspace_papers_dir(ws).glob("*.pdf")) == []
     # Nothing left in the library, so the store files are removed entirely.
-    assert not (library.user_index_dir(user_id) / "index.faiss").exists()
+    assert not (library.workspace_index_dir(ws) / "index.faiss").exists()
 
 
 @pytest.mark.slow
@@ -273,13 +273,13 @@ def test_deleting_one_of_two_papers_keeps_the_other_indexed(alice: TestClient, t
     chunks must come back with contiguous ids, not a corrupt store."""
     from backend.store import load
 
-    user_id = alice.get("/auth/me").json()["id"]
+    ws = workspace_id(alice)
     first = _upload(alice, "first.pdf", text_pdf).json()
     _upload(alice, "second.pdf", text_pdf)
 
     alice.delete(f"/papers/{first['id']}", headers=csrf(alice))
 
-    index, chunks = load(library.user_index_dir(user_id))
+    index, chunks = load(library.workspace_index_dir(ws))
     assert index.ntotal == len(chunks)
     assert {c.paper_id for c in chunks} == {"second"}
     assert [c.faiss_id for c in chunks] == list(range(len(chunks)))

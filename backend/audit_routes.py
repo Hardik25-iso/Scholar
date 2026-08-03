@@ -4,9 +4,13 @@
     GET /audit/{id}             -> one answer with every passage it used
     GET /audit/{id}/export      -> the same as a downloadable JSON or CSV file
 
-Read-only and scoped to the caller, like every library route: a missing entry
-and someone else's entry both return 404, so the response never confirms that
-another user's answer exists.
+Read-only and scoped to the WORKSPACE, like every library route: an entry from
+another workspace and an entry that does not exist both return 404, so the
+response never confirms that someone else's answer exists.
+
+Everyone in a workspace can read its answer log. That is the point of an audit
+trail in a shared library — a reviewer needs to see what the team was told, not
+only what they personally asked.
 """
 import csv
 import io
@@ -17,10 +21,10 @@ from fastapi.responses import StreamingResponse
 from sqlmodel import Session
 
 from backend import audit, library
-from backend.auth import get_current_user
 from backend.db import get_session
-from backend.db_models import AnswerLog, User
+from backend.db_models import AnswerLog, Workspace
 from backend.models import AnswerLogDetail, AnswerLogSummary, Citation
+from backend.workspaces import get_current_workspace
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
@@ -40,9 +44,9 @@ def _summary(entry: AnswerLog, reproducible: bool) -> AnswerLogSummary:
     )
 
 
-def _owned_entry(entry_id: int, user: User, session: Session) -> AnswerLog:
+def _visible_entry(entry_id: int, workspace: Workspace, session: Session) -> AnswerLog:
     entry = session.get(AnswerLog, entry_id)
-    if entry is None or entry.user_id != user.id:  # 404, not 403 — hide existence
+    if entry is None or entry.workspace_id != workspace.id:  # 404 — hide existence
         raise HTTPException(status.HTTP_404_NOT_FOUND, "audit entry not found")
     return entry
 
@@ -51,22 +55,22 @@ def _owned_entry(entry_id: int, user: User, session: Session) -> AnswerLog:
 def list_answers(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    user: User = Depends(get_current_user),
+    workspace: Workspace = Depends(get_current_workspace),
     session: Session = Depends(get_session),
 ) -> list[AnswerLogSummary]:
-    index_dir = library.user_index_dir(user.id)
-    entries = audit.list_for_user(session, user.id, limit, offset)
+    index_dir = library.workspace_index_dir(workspace.id)
+    entries = audit.list_for_workspace(session, workspace.id, limit, offset)
     return [_summary(e, audit.reproducible_against(e, index_dir)) for e in entries]
 
 
 @router.get("/{entry_id}", response_model=AnswerLogDetail)
 def get_answer(
     entry_id: int,
-    user: User = Depends(get_current_user),
+    workspace: Workspace = Depends(get_current_workspace),
     session: Session = Depends(get_session),
 ) -> AnswerLogDetail:
-    entry = _owned_entry(entry_id, user, session)
-    reproducible = audit.reproducible_against(entry, library.user_index_dir(user.id))
+    entry = _visible_entry(entry_id, workspace, session)
+    reproducible = audit.reproducible_against(entry, library.workspace_index_dir(workspace.id))
     return AnswerLogDetail(
         **_summary(entry, reproducible).model_dump(),
         query=entry.query,
@@ -85,7 +89,7 @@ def get_answer(
 def export_answer(
     entry_id: int,
     format: str = Query(default="json", pattern="^(json|csv)$"),
-    user: User = Depends(get_current_user),
+    workspace: Workspace = Depends(get_current_workspace),
     session: Session = Depends(get_session),
 ) -> StreamingResponse:
     """Download one answer with its full evidence chain.
@@ -95,12 +99,12 @@ def export_answer(
     a spreadsheet — it repeats the question on every row rather than needing a
     header block, so the file survives being sorted or filtered.
     """
-    entry = _owned_entry(entry_id, user, session)
+    entry = _visible_entry(entry_id, workspace, session)
     citations = _citations(entry)
-    reproducible = audit.reproducible_against(entry, library.user_index_dir(user.id))
+    reproducible = audit.reproducible_against(entry, library.workspace_index_dir(workspace.id))
 
     if format == "json":
-        payload = get_answer(entry_id, user, session).model_dump(mode="json")
+        payload = get_answer(entry_id, workspace, session).model_dump(mode="json")
         body = json.dumps(payload, indent=2, ensure_ascii=False)
         media_type = "application/json"
     else:

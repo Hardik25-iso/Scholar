@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend import library
-from backend.tests.conftest import csrf
+from backend.tests.conftest import csrf, workspace_id
 
 QUESTION = "What does the retriever select?"
 

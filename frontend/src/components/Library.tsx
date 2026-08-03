@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import type { Paper } from "../api";
 import { FileIcon, TrashIcon, UploadIcon } from "./icons";
+import WorkspaceSwitcher from "./WorkspaceSwitcher";
 
 interface Props {
   papers: Paper[];
@@ -9,13 +10,18 @@ interface Props {
   error: string | null;
   onUpload: (file: File) => void;
   onDelete: (id: number) => void;
+  onSwitchWorkspace: () => void;
 }
 
 /**
- * Left rail: the user's paper library. Upload adds a PDF (parsed + embedded
- * into their private index); every answer is grounded in exactly these papers.
+ * Left rail: the documents the current WORKSPACE holds. Every answer is
+ * grounded in exactly these, so the switcher sits directly above them — which
+ * library you are asking is not a settings-page detail, it is the single most
+ * important piece of context on the screen.
  */
-export default function Library({ papers, loading, uploading, error, onUpload, onDelete }: Props) {
+export default function Library({
+  papers, loading, uploading, error, onUpload, onDelete, onSwitchWorkspace,
+}: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
 
   const pick = () => fileRef.current?.click();
@@ -39,6 +45,8 @@ export default function Library({ papers, loading, uploading, error, onUpload, o
           {papers.length}
         </span>
       </div>
+
+      <WorkspaceSwitcher onSwitch={onSwitchWorkspace} />
 
       {/* upload dropzone */}
       {/* Keep in sync with parser.SUPPORTED_EXTENSIONS — the backend gates on the

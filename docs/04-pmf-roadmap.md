@@ -558,7 +558,78 @@ isolation tests still pass, extended to workspaces.
 
 ---
 
-### Phase 6 — Agentic research layer *(2 weeks)* — *the WAT Agents layer*
+### Phase 6 — Agentic research layer — **GATED: NOT BUILT, on the evidence**
+
+This phase was always conditional: *"only for the query class the deterministic workflow
+demonstrably fails."* That condition has now been measured, and **it is not met.** The agent is not
+built, and this section records why — so the decision is revisitable rather than forgotten.
+
+#### What was measured
+
+The eval gained a multi-part scoring mode. A question needing evidence from several passages only
+counts as a hit when **every** piece is present in the top k — scoring it on the first fragment
+would reward handing the model enough to write a confident, incomplete answer. Nine multi-hop and
+comparative questions were added over the existing corpus, including cross-document comparisons
+between the two agreements.
+
+`k=5`, `candidates=20`, n=51 over 76 chunks:
+
+| kind | hit@5 | of achievable | n |
+|---|---|---|---|
+| layout | 100% | 100% | 7 |
+| exact | 100% | 92% | 19 |
+| table | 100% | 88% | 4 |
+| semantic | 100% | 85% | 11 |
+| **multihop** (within a document) | **100%** | — | 3 |
+| **comparative** (across documents) | **80%** | **63%** | 5 |
+| **vocabulary** | **0%** | **0%** | 2 |
+
+*"of achievable" matters:* a question needing N passages cannot complete before rank N, so its best
+possible MRR is 1/N. Comparing a comparative question's raw MRR of 0.317 against an exact question's
+0.921 compares a 0.5 ceiling with a 1.0 one and means nothing. The eval now reports attainment
+against the ceiling for exactly this reason.
+
+#### Why the agent is not justified
+
+1. **Within-document multi-hop already works — 100%.** The deterministic path retrieves both halves
+   of "what is the commitment, and what happens if it is missed" without help.
+2. **Cross-document comparison is the weakest class but is not failing.** 80% at k=5, and **100% at
+   k=12**. The evidence is retrievable; it is simply spread deeper in the list because a comparison
+   inherently needs one passage per document. That is an argument for an adaptive `k`, not for an
+   LLM planning loop.
+3. **The one genuinely broken class is not one an agent fixes.** `vocabulary` scores **0%** — and
+   decomposing the question into sub-questions would decompose the same unmatched words.
+
+#### The real finding: a distinct failure mode, previously miscounted
+
+Two questions fail because the query and the passage **share no rare term**: the document says
+*availability*, the question says *uptime*; the answer contains *Adam*, the question says *optimizer*.
+Lexical search cannot help — it only helps when the rare token is in the **query**, not the answer —
+and the embedder does not bridge the gap either. These were sitting inside the `semantic` bucket,
+dragging it down and hiding the fact that everything else in it now scores 100%.
+
+**The next retrieval work is query expansion, not an agent.** It addresses the only class at 0%.
+
+#### Two mistakes this investigation corrected
+
+- **"The reranker is the bottleneck" was wrong.** That came from reading an aggregate (stage 1 100%,
+  stage 2 95.3%). Per question, the reranker **promotes 9, demotes 4, and loses 2** — strongly net
+  positive. Both losses are the vocabulary cases, where the gold passage genuinely scores low
+  (−8.4 and −11.1) because it does not look like an answer to the question as asked.
+- **One "multi-hop" question was not multi-hop.** Both of `hop-01`'s required spans live in the
+  **same chunk**, so it measured a synonym gap while wearing a multi-hop label. Removed as a
+  duplicate of `msa-06`. The eval now flags attainment above 100% precisely because that means the
+  labelled parts shared a passage — the label, not the retriever, was describing the difficulty.
+
+#### When to revisit
+
+Build the agent when a measured class actually fails: comparative dropping below ~70% at a realistic
+`k` on a corpus of thousands of chunks, or a new class (multi-step reasoning over retrieved numbers)
+scoring near zero. The questions are in the eval now, so that check is one command.
+
+---
+
+### Phase 6 — original plan *(retained for reference; superseded by the gate above)*
 
 Only now, and only for the query class the deterministic workflow demonstrably fails.
 

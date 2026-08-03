@@ -113,15 +113,31 @@ def available_docs() -> dict[str, Path]:
 @dataclass
 class Question:
     id: str
-    doc: str
     kind: str
     question: str
-    expect: list[str]
+    doc: str | None = None          # None for a question spanning several documents
+    expect: list[str] | None = None  # ANY of these -> the evidence arrived
+    # MULTI-PART questions. Each inner list is one required piece of evidence
+    # (ANY span within it counts); EVERY piece must be present in the top k.
+    # "What is the uptime commitment and what happens if it is missed?" is not
+    # answerable from one passage, and scoring it as a hit when only half the
+    # evidence arrived would measure the wrong thing — the model would have been
+    # handed enough to write a confident, incomplete answer.
+    all_of: list[list[str]] | None = None
+    docs: list[str] | None = None    # documents a multi-document question needs
+
+    def required_groups(self) -> list[list[str]]:
+        return self.all_of if self.all_of else [self.expect or []]
+
+    def documents(self) -> list[str]:
+        if self.docs:
+            return self.docs
+        return [self.doc] if self.doc else []
 
 
 def load_dataset() -> tuple[list[Question], list[dict]]:
     raw = json.loads(DATASET.read_text(encoding="utf-8"))
-    questions = [Question(**{k: v for k, v in q.items()}) for q in raw["questions"]]
+    questions = [Question(**q) for q in raw["questions"]]
     return questions, raw.get("refusals", [])
 
 
@@ -136,13 +152,18 @@ def check_labels(questions: list[Question]) -> int:
     docs = available_docs()
     bad, skipped = [], []
     for q in questions:
-        if q.doc not in docs:
+        needed = q.documents()
+        if not needed or any(d not in docs for d in needed):
             skipped.append(q.id)
             continue
-        text = " ".join(extract_pages(docs[q.doc]))
-        for span in q.expect:
-            if normalize(span) not in normalize(text):
-                bad.append((q.id, span))
+        text = normalize(" ".join(
+            page for d in needed for page in extract_pages(docs[d])
+        ))
+        for group in q.required_groups():
+            # ANY span in a group is enough — they are alternative wordings of
+            # the same piece of evidence. A group where NONE match is a typo.
+            if not any(normalize(span) in text for span in group):
+                bad.append((q.id, " | ".join(group)))
 
     for qid, span in bad:
         print(f"  BAD LABEL {qid}: span not found in the document -> {span!r}")
@@ -177,22 +198,49 @@ def build_index(docs: dict[str, Path], store_dir: Path) -> dict[str, int]:
 
 
 def first_hit_rank(citations: list[Citation], q: Question) -> int | None:
-    """1-based rank of the first passage containing an expected span."""
+    """1-based rank at which the question's evidence is COMPLETE.
+
+    For a single-part question that is the rank of the first matching passage.
+    For a multi-part one it is the rank at which the LAST missing piece arrives —
+    because a half-answered question is not answered, and rewarding partial
+    evidence would let the score improve while the model still cannot answer.
+    """
+    allowed = set(q.documents())
+    outstanding = [list(group) for group in q.required_groups()]
+
     for rank, c in enumerate(citations, start=1):
-        if c.paper_id == q.doc and contains_any(c.text, q.expect):
+        if allowed and c.paper_id not in allowed:
+            continue
+        outstanding = [g for g in outstanding if not contains_any(c.text, g)]
+        if not outstanding:
             return rank
     return None
 
 
 @dataclass
 class Score:
+    """Retrieval scores, with the structural ceiling multi-part questions impose.
+
+    A question needing evidence from N distinct passages CANNOT complete before
+    rank N — one passage cannot contain two documents' clauses. So its best
+    possible reciprocal rank is 1/N, and its hit@1 is unattainable for N > 1.
+
+    Comparing a raw MRR of 0.32 on two-part questions against 0.92 on one-part
+    questions is therefore meaningless: the ceilings are 0.5 and 1.0. `ceiling`
+    tracks the best achievable score for the questions actually scored, so the
+    report can show how much of the attainable performance was reached instead
+    of implying a failure that is arithmetic.
+    """
+
     hits: int = 0
     top1: int = 0
     total: int = 0
     rr: float = 0.0
+    best_rr: float = 0.0  # sum of 1/parts — the perfect score for these questions
 
-    def add(self, rank: int | None) -> None:
+    def add(self, rank: int | None, parts: int = 1) -> None:
         self.total += 1
+        self.best_rr += 1 / max(1, parts)
         if rank is not None:
             self.hits += 1
             self.rr += 1 / rank
@@ -211,6 +259,19 @@ class Score:
     def mrr(self) -> float:
         return self.rr / self.total if self.total else 0.0
 
+    @property
+    def attained(self) -> float:
+        """Share of the ACHIEVABLE ranking quality reached (1.0 == perfect).
+
+        This is the number to compare across question kinds; raw MRR is not.
+        """
+        return self.rr / self.best_rr if self.best_rr else 0.0
+
+    @property
+    def parts(self) -> float:
+        """Average pieces of evidence a question in this slice needs."""
+        return self.total / self.best_rr if self.best_rr else 1.0
+
 
 def run(k: int, candidates: int, dense_only: bool = False) -> int:
     from backend import lexical
@@ -224,8 +285,8 @@ def run(k: int, candidates: int, dense_only: bool = False) -> int:
         print("No PDFs in the corpus. Run: python -m backend.eval --build-corpus")
         return 1
 
-    runnable = [q for q in questions if q.doc in docs]
-    missing = sorted({q.doc for q in questions} - set(docs))
+    runnable = [q for q in questions if q.documents() and all(d in docs for d in q.documents())]
+    missing = sorted({d for q in questions for d in q.documents()} - set(docs))
     if missing:
         print(f"NOTE: skipping {len(questions) - len(runnable)} question(s); "
               f"missing document(s): {', '.join(missing)} (see corpus/README.md)\n")
@@ -269,13 +330,14 @@ def run(k: int, candidates: int, dense_only: bool = False) -> int:
 
             # Each retriever scored on its own too, so the fusion has to justify
             # itself against both rather than only against the previous baseline.
-            dense_score.add(first_hit_rank(dense, q))
-            sparse_score.add(first_hit_rank(sparse, q))
+            parts = len(q.required_groups())
+            dense_score.add(first_hit_rank(dense, q), parts)
+            sparse_score.add(first_hit_rank(sparse, q), parts)
 
-            stage1.add(first_hit_rank(cands, q))
+            stage1.add(first_hit_rank(cands, q), parts)
             rank = first_hit_rank(top, q)
-            stage2.add(rank)
-            by_kind.setdefault(q.kind, Score()).add(rank)
+            stage2.add(rank, parts)
+            by_kind.setdefault(q.kind, Score()).add(rank, parts)
             if rank is None:
                 misses.append(q)
 
@@ -295,10 +357,19 @@ def run(k: int, candidates: int, dense_only: bool = False) -> int:
           f"   MRR {stage2.mrr:.3f}   hit@1 {stage2.hit1:6.1%}")
     print()
     print("  by question kind (after reranking):")
+    print(f"    {'kind':<12} {'hit@' + str(k):>7} {'MRR':>7} {'of max':>8} {'parts':>6}   n")
     for kind in sorted(by_kind):
         s = by_kind[kind]
-        print(f"    {kind:<10} hit@{k} {s.hit_rate:6.1%}   MRR {s.mrr:.3f}"
-              f"   hit@1 {s.hit1:6.1%}   (n={s.total})")
+        print(f"    {kind:<12} {s.hit_rate:>7.1%} {s.mrr:>7.3f} {s.attained:>8.1%} "
+              f"{s.parts:>6.1f}   {s.total}")
+    print()
+    print("    'of max' is the share of ACHIEVABLE ranking quality reached. A question")
+    print("    needing evidence from N passages cannot complete before rank N, so its")
+    print("    best possible MRR is 1/N — comparing raw MRR across kinds with different")
+    print("    'parts' counts compares different ceilings and means nothing.")
+    print("    Above 100% means the labelled parts turned out to share one passage, so")
+    print("    the question was not multi-part for retrieval. That is worth knowing:")
+    print("    it means the label, not the retriever, was describing the difficulty.")
 
     if misses:
         print(f"\n  {len(misses)} miss(es) — the evidence never reached the model:")

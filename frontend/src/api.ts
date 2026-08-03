@@ -104,7 +104,14 @@ export interface AnswerLogSummary {
 }
 
 export interface AnswerLogDetail extends AnswerLogSummary {
-  query: string; // what retrieval ran on — differs for a condensed follow-up
+  query: string; // the standalone question after condensing; what generation saw
+  /** What retrieval and reranking ACTUALLY ran on, when query expansion changed
+   *  it — the user's question plus an LLM-generated hypothetical answer. null
+   *  means no expansion happened, not that it was withheld. Recorded because
+   *  expansion makes retrieval non-deterministic, and `reproducible` would
+   *  otherwise be claiming more than it can support. */
+  retrieval_query: string | null;
+  expansion_mode: "none" | "prf" | "hyde";
   answer: string;
   citations: Citation[];
   temperature: number;

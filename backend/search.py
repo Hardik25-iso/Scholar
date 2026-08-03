@@ -104,8 +104,12 @@ def shortlist(
         effective_query, terms = expansion.expand(query, candidates)
         expanded = bool(terms)
     elif expansion_mode == "hyde":
-        effective_query = f"{query} {expansion.hypothetical_answer(query)}"
-        expanded = True
+        hypothetical = expansion.hypothetical_answer(query)
+        # Empty means the LLM was unreachable; expansion.hypothetical_answer has
+        # already logged it and degraded rather than raising.
+        expanded = bool(hypothetical)
+        if expanded:
+            effective_query = f"{query} {hypothetical}"
     else:
         expanded = False
 

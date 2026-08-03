@@ -238,7 +238,11 @@ class AnswerLogSummary(BaseModel):
 
 class AnswerLogDetail(AnswerLogSummary):
     """A logged answer with its complete evidence chain."""
-    query: str                  # what retrieval ran on (differs for a follow-up)
+    query: str                  # the standalone question, after condensing
+    # What retrieval and reranking ACTUALLY ran on, when expansion changed it.
+    # None means no expansion happened — not that it was withheld.
+    retrieval_query: str | None
+    expansion_mode: str
     answer: str
     citations: list[Citation]
     temperature: float

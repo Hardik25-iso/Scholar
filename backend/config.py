@@ -62,12 +62,21 @@ class Settings(BaseSettings):
     cookie_samesite: str = "lax"
 
     # Query-expansion strategy: "none", "prf" or "hyde".
-    # Default "none" because PRF was built, measured and REJECTED — it made
-    # every category worse and did not move the class it targeted (see
-    # docs/04-pmf-roadmap.md). "hyde" costs an LLM call per question and makes
-    # retrieval non-deterministic, which is in tension with the audit log's
-    # reproducibility claim, so it is opt-in rather than default.
-    query_expansion: str = "none"
+    #
+    # "hyde" is the default because it was measured best: misses 3 -> 1, hit@5
+    # 94.1% -> 98.0%, and the `vocabulary` class off 0%. It costs one extra LLM
+    # call per question and trades some ranking precision for recall.
+    #
+    # It is only an honest default because AnswerLog.retrieval_query records the
+    # hypothetical it generated. Retrieval is no longer purely deterministic, so
+    # the audit trail has to show what was actually searched — otherwise there is
+    # no way to tell a changed library from a differently-worded hypothetical.
+    # If that column is ever dropped, this must go back to "none".
+    #
+    # "prf" was built, measured and REJECTED: worse everywhere, and it did not
+    # move the class it targeted. Kept selectable so the result stays
+    # reproducible — see docs/04-pmf-roadmap.md.
+    query_expansion: str = "hyde"
 
     # Whether to OCR scanned PDFs at all. OCR is slow and CPU-hungry, so a small
     # instance may reasonably refuse it — and an explicit switch is the only

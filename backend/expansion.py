@@ -10,32 +10,40 @@ enough to beat twenty passages that discuss neither.
 Measured before building this: those questions scored 0% while every other
 category scored 100%.
 
-WHY PSEUDO-RELEVANCE FEEDBACK AND NOT HyDE. The obvious alternative is to ask an
-LLM to rewrite the question or hallucinate an answer to embed. It works, and it
-is the wrong trade HERE, for a reason specific to this product: the audit log
-promises that a logged answer can be reproduced against the same index. An LLM
-in the retrieval path makes retrieval non-deterministic, so two runs of the same
-question could retrieve different passages and the central claim quietly stops
-being true. PRF is deterministic, adds no API call, no latency and no
-dependency — and it is aimed squarely at vocabulary mismatch, which is the
-measured failure.
+TWO STRATEGIES LIVE HERE, AND ONLY ONE WORKS. Both stay selectable
+(`--expansion prf|hyde`) so the comparison is reproducible rather than a claim.
 
-HOW IT WORKS. Run retrieval once. Treat the top few passages as probably
-relevant, and the rest of the shortlist as background. A term that is common in
-the top passages and rare in the background is a term the answer's own
-vocabulary uses — exactly what the question was missing. Add those terms and run
-again.
+  hyde  DEFAULT. Ask the LLM what the answer would LOOK like and search for
+        that. It has the outside knowledge the corpus cannot supply — that a
+        service level is written as *availability*, that an optimiser is named
+        *Adam*. Measured: misses 3 -> 1, hit@5 94.1% -> 98.0%.
+  prf   MEASURED AND REJECTED. See below; kept because "did you try PRF?" is a
+        question that will be asked again.
 
-The failure mode of PRF is query drift: if the first pass is wrong, expansion
-confidently makes it wronger. Two guards, both measured rather than assumed:
-terms must appear in at least two of the top passages (one passage cannot vote
-itself into the query), and the original results are fused with the expanded
-ones rather than replaced, so expansion can only add candidates.
+WHY PRF FAILED, AND WHY IT IS NOT A TUNING PROBLEM. Pseudo-relevance feedback
+mines expansion terms from the top passages of a first retrieval pass, assuming
+that pass is roughly right and merely needs richer vocabulary. On the failing
+questions the assumption is false: the passage that answers the question is not
+in the feedback set *because of the vocabulary gap PRF was brought in to fix*.
+It mined 'law', 'thirty', 'governed', 'signed'. The first pass is wrong for
+exactly the reason expansion was needed, so expansion confidently makes it
+wronger. PRF can enrich a nearly-right query; it cannot rescue a wrong one.
+
+THE COST OF THE DEFAULT, STATED PLAINLY. HyDE puts an LLM in the retrieval path,
+so retrieval is no longer purely deterministic, and it trades some ranking
+precision for recall (MRR 0.822 -> 0.805). It is an honest default ONLY because
+`AnswerLog.retrieval_query` records the hypothetical that was generated — with
+that column, a reviewer can see exactly what was searched; without it, there is
+no way to tell a changed library from a differently-worded hypothetical. If that
+column is ever dropped, the default must go back to "none".
 """
+import logging
 import re
 from collections import Counter
 
 from backend.models import Citation
+
+log = logging.getLogger(__name__)
 
 # Passages treated as "probably relevant" for mining terms. Small on purpose:
 # the wider the feedback set the more background vocabulary leaks in.
@@ -141,13 +149,22 @@ def hypothetical_answer(query: str) -> str:
 
     from backend.generator import MODEL
 
-    response = ollama.chat(
-        model=MODEL,
-        messages=[{"role": "system", "content": HYDE_PROMPT},
-                  {"role": "user", "content": query}],
-        options={"temperature": 0.0, "num_predict": 60},
-    )
-    return response["message"]["content"].strip()
+    try:
+        response = ollama.chat(
+            model=MODEL,
+            messages=[{"role": "system", "content": HYDE_PROMPT},
+                      {"role": "user", "content": query}],
+            options={"temperature": 0.0, "num_predict": 60},
+        )
+        return response["message"]["content"].strip()
+    except Exception as exc:  # noqa: BLE001 — expansion is an optimisation
+        # Degrade to no expansion rather than failing the question. Expansion
+        # improves recall; it is not required for a correct answer, and a
+        # retrieval-time optimisation must never be the reason a user gets an
+        # error. Logged loudly because silently losing it would show up later as
+        # an unexplained drop in retrieval quality.
+        log.warning("query expansion unavailable, continuing unexpanded: %s", exc)
+        return ""
 
 
 def expand(query: str, citations: list[Citation], **kwargs) -> tuple[str, list[str]]:

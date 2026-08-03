@@ -161,9 +161,19 @@ class AnswerLog(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_utcnow, index=True)
 
     question: str                      # exactly what the user typed
-    query: str                         # what retrieval actually ran on — differs
-                                       # from `question` for a condensed follow-up
+    query: str                         # the standalone question after condensing
+                                       # a follow-up; what generation received
     answer: str = Field(sa_column=Column(Text))
+
+    # What retrieval and reranking ACTUALLY ran on. With query expansion this is
+    # `query` plus a hypothetical answer the LLM invented, and recording it is
+    # what keeps the reproducibility claim true: the hypothetical is generated
+    # by a model, so without it in the log there is no way to tell whether a
+    # different result came from a changed library or a differently-worded
+    # hypothetical. Nullable because entries written before expansion existed
+    # have no third query, and back-filling one would be a fabrication.
+    retrieval_query: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    expansion_mode: str = Field(default="none")
 
     # The evidence chain: a JSON array of citations, each with paper_id, page,
     # unit, chunk_index, faiss_id, char span, and both stage scores. Stored as

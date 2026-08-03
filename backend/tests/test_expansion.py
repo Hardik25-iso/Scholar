@@ -85,13 +85,24 @@ def test_expansion_is_deterministic():
 # ——— the default ———
 
 
-def test_expansion_is_off_by_default():
-    """PRF was measured and REJECTED: it made every category worse and did not
-    move the class it targeted. HyDE works but costs an LLM call and makes
-    retrieval non-deterministic, so it is opt-in. Neither is a default."""
+def test_hyde_is_the_default_and_prf_is_not():
+    """HyDE measured best (misses 3 -> 1). PRF was measured and REJECTED: worse
+    everywhere, and it did not move the class it targeted."""
     from backend.config import settings
 
-    assert settings.query_expansion == "none"
+    assert settings.query_expansion == "hyde"
+
+
+def test_the_default_requires_the_audit_column_that_justifies_it():
+    """HyDE is only an honest default because the hypothetical it generates is
+    recorded. If that column is ever dropped, the default must go back to
+    "none" — this test is the tripwire for that."""
+    from backend.config import settings
+    from backend.db_models import AnswerLog
+
+    if settings.query_expansion != "none":
+        assert "retrieval_query" in AnswerLog.model_fields
+        assert "expansion_mode" in AnswerLog.model_fields
 
 
 @pytest.mark.slow
@@ -108,5 +119,6 @@ def test_shortlist_ignores_expansion_when_mode_is_none(tmp_path):
     append_to_store(chunks, embed([c.embed_text for c in chunks], progress=False), tmp_path)
     lexical.index_chunks(chunks, tmp_path)
 
-    _, effective = shortlist("retrieval", tmp_path, Retriever(tmp_path), k=4)
+    _, effective = shortlist("retrieval", tmp_path, Retriever(tmp_path), k=4,
+                             expansion_mode="none")
     assert effective == "retrieval", "query was expanded despite mode 'none'"

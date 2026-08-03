@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from backend.chunker import chunk_pages
+from backend.config import settings
 from backend.models import Citation
 
 HERE = Path(__file__).parent
@@ -396,8 +397,10 @@ def main() -> int:
                    help=f"stage-1 shortlist depth (default {DEFAULT_CANDIDATES})")
     p.add_argument("--dense-only", action="store_true",
                    help="disable lexical search and fusion — the pre-hybrid baseline")
-    p.add_argument("--expansion", choices=("none", "prf", "hyde"), default="none",
-                   help="query expansion strategy (default none — prf was measured and rejected)")
+    p.add_argument("--expansion", choices=("none", "prf", "hyde"),
+                   default=settings.query_expansion,
+                   help="query expansion strategy (defaults to the CONFIGURED one, so the "
+                        "eval measures what ships)")
     args = p.parse_args()
 
     if args.build_corpus:

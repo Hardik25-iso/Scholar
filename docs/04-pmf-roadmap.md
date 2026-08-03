@@ -675,9 +675,36 @@ The precision cost is also real and should not be waved past: MRR 0.822 → 0.80
 70.6%, and `table` MRR 0.875 → 0.667. HyDE trades ranking precision for recall. Recall is the more
 valuable of the two here — a passage the model never sees cannot be used — but it is a trade.
 
-**To turn it on honestly:** set `QUERY_EXPANSION=hyde`, *and* record the generated hypothetical in
-`AnswerLog` (a new column) so the audit trail shows exactly what was searched. Without that second
-half, enabling it makes the reproducibility claim untrue. That column is the remaining work.
+#### HyDE is now the default — with the column that makes it honest
+
+`AnswerLog` gained `retrieval_query` and `expansion_mode`, and `QUERY_EXPANSION` now defaults to
+`hyde`. The column is not bookkeeping; it is the precondition. Retrieval is no longer purely
+deterministic, so without the generated hypothetical in the log there is no way to tell a changed
+library from a differently-worded hypothetical — and `reproducible` would be claiming more than it
+can support. `test_the_default_requires_the_audit_column_that_justifies_it` is the tripwire: if the
+column is ever dropped, that test forces the default back to `none`.
+
+Three things this needed beyond flipping a setting:
+
+1. **A migration.** `backend/migrate.py` adds both columns to existing databases. `retrieval_query`
+   is nullable with no default — an entry written before expansion existed genuinely has no third
+   query, and back-filling one would put a fabricated value in an audit trail. Verified on a
+   database that already had `answerlog` without the columns.
+2. **A fallback.** If the LLM is unreachable, `hypothetical_answer` logs and returns `""`, and
+   retrieval proceeds unexpanded. Expansion improves recall; it is not required for a correct
+   answer, and a retrieval-time optimisation must never be why a user gets an error.
+3. **Three queries, kept separate.** `question` (what was typed) → `query` (standalone, after
+   condensing a follow-up; **this is what generation receives**) → `retrieval_query` (plus the
+   hypothetical; what retrieval and reranking ran on).
+
+**The separation is load-bearing, and it is observable.** Verified end to end on the question that
+scored 0% before: the hypothetical invented *"ninety-nine point nine percent (99.9%) uptime
+guarantee"*, and the answer correctly says **99.5%** — the real figure from the retrieved clause.
+The hypothetical steers retrieval and never reaches the generator, so it cannot contaminate the
+answer. That is the grounding contract doing its job under a change that could easily have broken it.
+
+The eval now defaults to the *configured* strategy rather than to `none`, so `python -m backend.eval`
+measures what actually ships instead of a variant nobody runs.
 
 #### Two mistakes this investigation corrected
 

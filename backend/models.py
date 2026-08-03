@@ -166,6 +166,64 @@ class PaperPublic(BaseModel):
     created_at: datetime
 
 
+# ——— Workspace boundary models ———
+
+class WorkspacePublic(BaseModel):
+    """A workspace as the caller sees it, including their own role in it."""
+    id: int
+    name: str
+    is_personal: bool
+    role: str            # the CALLER's role, not a property of the workspace
+    is_current: bool     # is this the one their requests act on right now
+    created_at: datetime
+
+
+class CreateWorkspaceRequest(BaseModel):
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def name_rules(cls, v: str) -> str:
+        name = v.strip()
+        if not 1 <= len(name) <= 80:
+            raise ValueError("name must be between 1 and 80 characters")
+        return name
+
+
+class InviteRequest(BaseModel):
+    email: EmailStr
+    role: str = "member"
+
+    @field_validator("role")
+    @classmethod
+    def role_rules(cls, v: str) -> str:
+        if v not in ("owner", "member"):
+            raise ValueError("role must be 'owner' or 'member'")
+        return v
+
+
+class InvitationCreated(BaseModel):
+    """A freshly minted invitation.
+
+    `token` is present ONLY because delivery is not wired up yet, and is
+    returned to the inviter alone so they can pass it on by hand. It must be
+    removed the moment a mail provider exists — an invitation token in an API
+    response is a credential in a place credentials do not belong.
+    """
+    id: int
+    email: EmailStr
+    role: str
+    expires_at: datetime
+    token: str
+
+
+class MemberPublic(BaseModel):
+    user_id: int
+    email: EmailStr
+    role: str
+    joined_at: datetime
+
+
 # ——— Audit boundary models ———
 
 class AnswerLogSummary(BaseModel):

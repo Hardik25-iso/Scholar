@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     # which a leaked link is useful should be measured in minutes.
     reset_token_expire_minutes: int = 30
 
+    # Invitations live longer than resets — people take days to act on them, and
+    # the consequence of a stale one is a re-invite rather than a lockout.
+    invitation_expire_days: int = 14
+
     # Per-user request budgets. /ask runs retrieval, reranking and a full LLM
     # generation, so it is the expensive route and the one worth capping — and
     # it becomes a billing control the moment generation is a paid API.

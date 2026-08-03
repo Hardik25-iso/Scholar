@@ -33,16 +33,27 @@ from backend.api import app  # noqa: E402
 from backend.config import settings  # noqa: E402
 from backend.db import engine, init_db  # noqa: E402
 
-library.DATA_ROOT = _TMP / "users"
+library.DATA_ROOT = _TMP / "workspaces"
+# Redirected too, and NOT an afterthought: the migration tests write into the
+# legacy tree to simulate a pre-workspace install. When this was missed, those
+# tests created directories inside the developer's REAL data/users. The guard
+# below now covers every path the app can write to, so the next one added is
+# caught by a failing assertion rather than by noticing stray files later.
+library.LEGACY_DATA_ROOT = _TMP / "users"
 
 # ——— the guard: prove we are not pointed at real data ———
 
 _REPO_DATA = (Path(__file__).resolve().parents[2] / "data").resolve()
+_WRITABLE_ROOTS = {
+    "library.DATA_ROOT": library.DATA_ROOT,
+    "library.LEGACY_DATA_ROOT": library.LEGACY_DATA_ROOT,
+}
 
 assert _TMP.resolve() != _REPO_DATA, "temp dir collided with the repo data dir"
-assert str(library.DATA_ROOT.resolve()).startswith(str(_TMP.resolve())), (
-    f"library.DATA_ROOT escaped the sandbox: {library.DATA_ROOT}"
-)
+for _name, _root in _WRITABLE_ROOTS.items():
+    assert str(_root.resolve()).startswith(str(_TMP.resolve())), (
+        f"{_name} escaped the sandbox: {_root}"
+    )
 assert str(_TMP.resolve()) in settings.database_url.replace("/", os.sep), (
     f"DATABASE_URL escaped the sandbox: {settings.database_url}"
 )
@@ -93,7 +104,8 @@ def _reset_state() -> None:
             session.exec(delete(table))
         session.commit()
     shutil.rmtree(library.DATA_ROOT, ignore_errors=True)
-    library._retrievers.clear()  # the per-user Retriever cache is process-global
+    shutil.rmtree(library.LEGACY_DATA_ROOT, ignore_errors=True)
+    library._retrievers.clear()  # the Retriever cache is process-global
     ask_limiter.reset()
     upload_limiter.reset()
 
@@ -112,6 +124,19 @@ def alice(client: TestClient) -> TestClient:
 def csrf(client: TestClient) -> dict[str, str]:
     """The double-submit header for an authenticated client's unsafe request."""
     return {"X-CSRF-Token": client.cookies.get("csrf_token", "")}
+
+
+def workspace_id(client: TestClient) -> int:
+    """The workspace this client's requests currently act on.
+
+    Asked of the API rather than computed, so a test that checks files on disk
+    is looking where the ROUTES actually wrote — not where the test believes
+    they should have.
+    """
+    workspaces = client.get("/workspaces").json()
+    current = [w for w in workspaces if w["is_current"]]
+    assert current, f"no active workspace: {workspaces}"
+    return current[0]["id"]
 
 
 @pytest.fixture

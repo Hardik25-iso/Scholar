@@ -28,296 +28,507 @@
       "doc": "rag_paper",
       "kind": "semantic",
       "question": "What retriever architecture does RAG use?",
-      "expect": ["DPR follows a bi-encoder architecture"]
+      "expect": [
+        "DPR follows a bi-encoder architecture"
+      ]
     },
     {
       "id": "rag-03",
       "doc": "rag_paper",
       "kind": "semantic",
       "question": "Which model components are updated during fine-tuning, and which are kept frozen?",
-      "expect": ["keep the document encoder (and index) fixed, only fine-tuning the query encoder"]
+      "expect": [
+        "keep the document encoder (and index) fixed, only fine-tuning the query encoder"
+      ]
     },
     {
       "id": "rag-04",
       "doc": "rag_paper",
-      "kind": "semantic",
+      "kind": "vocabulary",
       "question": "What optimizer is used to train the model?",
-      "expect": ["stochastic gradient descent with Adam"]
+      "expect": [
+        "stochastic gradient descent with Adam"
+      ]
     },
     {
       "id": "rag-05",
       "doc": "rag_paper",
       "kind": "exact",
       "question": "Which Wikipedia dump is used as the knowledge source?",
-      "expect": ["we use the December 2018 dump"]
+      "expect": [
+        "we use the December 2018 dump"
+      ]
     },
     {
       "id": "rag-06",
       "doc": "rag_paper",
       "kind": "exact",
       "question": "How is each Wikipedia article split, and how many documents result?",
-      "expect": ["split into disjoint 100-word chunks, to make a total of 21M documents"]
+      "expect": [
+        "split into disjoint 100-word chunks, to make a total of 21M documents"
+      ]
     },
     {
       "id": "rag-07",
       "doc": "rag_paper",
       "kind": "exact",
       "question": "What index and approximation are used for fast retrieval?",
-      "expect": ["MIPS index using FAISS", "Hierarchical Navigable Small World approximation"]
+      "expect": [
+        "MIPS index using FAISS",
+        "Hierarchical Navigable Small World approximation"
+      ]
     },
     {
       "id": "rag-08",
       "doc": "rag_paper",
       "kind": "semantic",
       "question": "What are the two decoding procedures described for RAG-Sequence?",
-      "expect": ["Thorough Decoding", "Fast Decoding"]
+      "expect": [
+        "Thorough Decoding",
+        "Fast Decoding"
+      ]
     },
     {
       "id": "rag-09",
       "doc": "rag_paper",
       "kind": "exact",
       "question": "How many train, dev and test examples are in the Jeopardy question generation split?",
-      "expect": ["100K train, 14K dev, and 27K test examples"]
+      "expect": [
+        "100K train, 14K dev, and 27K test examples"
+      ]
     },
     {
       "id": "rag-10",
       "doc": "rag_paper",
       "kind": "semantic",
       "question": "What is Q-BLEU and why is it used instead of BLEU?",
-      "expect": ["variant of BLEU with a higher weight for matching entities"]
+      "expect": [
+        "variant of BLEU with a higher weight for matching entities"
+      ]
     },
     {
       "id": "rag-11",
       "doc": "rag_paper",
       "kind": "exact",
       "question": "How often does RAG answer correctly when the answer is not in any retrieved document?",
-      "expect": ["achieving 11.8% accuracy in such cases for NQ"]
+      "expect": [
+        "achieving 11.8% accuracy in such cases for NQ"
+      ]
     },
     {
       "id": "rag-12",
       "doc": "rag_paper",
       "kind": "exact",
       "question": "By how much does RAG-Sequence outperform BART on Open MS-MARCO?",
-      "expect": ["by 2.6 Bleu points and 2.6 Rouge-L points"]
+      "expect": [
+        "by 2.6 Bleu points and 2.6 Rouge-L points"
+      ]
     },
     {
       "id": "rag-13",
       "doc": "rag_paper",
       "kind": "exact",
       "question": "How accurately does RAG answer world leader questions using the 2016 index?",
-      "expect": ["RAG answers 70% correctly using the 2016 index"]
+      "expect": [
+        "RAG answers 70% correctly using the 2016 index"
+      ]
     },
     {
       "id": "rag-14",
       "doc": "rag_paper",
       "kind": "table",
       "question": "In the ablation table, what is the RAG-Token exact match score on NQ?",
-      "expect": ["RAG-Token 43.5 54.8 46.5 51.9"]
+      "expect": [
+        "RAG-Token 43.5 54.8 46.5 51.9"
+      ]
     },
     {
       "id": "rag-15",
       "doc": "rag_paper",
       "kind": "table",
       "question": "What score does RAG-Sequence get on Natural Questions in the open-domain QA test table?",
-      "expect": ["RAG-Seq. 44.5 56.8/68.0 45.2 52.2"]
+      "expect": [
+        "RAG-Seq. 44.5 56.8/68.0 45.2 52.2"
+      ]
     },
-
     {
       "id": "col-01",
       "doc": "market_brief_2col",
       "kind": "layout",
       "question": "What is the warehouse vacancy rate and when was it last this low?",
-      "expect": ["fell to 3.1% in the third quarter, the lowest level recorded since the series began in 2011"]
+      "expect": [
+        "fell to 3.1% in the third quarter, the lowest level recorded since the series began in 2011"
+      ]
     },
     {
       "id": "col-02",
       "doc": "market_brief_2col",
       "kind": "layout",
       "question": "By how much did rent-free incentive periods shorten?",
-      "expect": ["from an average of 9.2 months rent-free to 5.6 months"]
+      "expect": [
+        "from an average of 9.2 months rent-free to 5.6 months"
+      ]
     },
     {
       "id": "col-03",
       "doc": "market_brief_2col",
       "kind": "layout",
       "question": "How much does sublet space add to the reported vacancy figure?",
-      "expect": ["adds a further 40 basis points and has been rising since March"]
+      "expect": [
+        "adds a further 40 basis points and has been rising since March"
+      ]
     },
     {
       "id": "col-04",
       "doc": "market_brief_2col",
       "kind": "layout",
       "question": "Why should rail freight volumes not be read as an indicator of warehouse demand?",
-      "expect": ["reflects a shift in what is being moved rather than how much"]
+      "expect": [
+        "reflects a shift in what is being moved rather than how much"
+      ]
     },
     {
       "id": "col-05",
       "doc": "market_brief_2col",
       "kind": "layout",
       "question": "How far did rail tonne-kilometres fall and for how many quarters?",
-      "expect": ["fell 2.7% against the same quarter last year, the fourth consecutive quarterly decline"]
+      "expect": [
+        "fell 2.7% against the same quarter last year, the fourth consecutive quarterly decline"
+      ]
     },
-
     {
       "id": "msa-01",
       "doc": "sample_agreement",
       "kind": "exact",
       "question": "What does Section 7.2 say?",
-      "expect": ["7.2 Force Majeure. Neither party shall be liable"]
+      "expect": [
+        "7.2 Force Majeure. Neither party shall be liable"
+      ]
     },
     {
       "id": "msa-02",
       "doc": "sample_agreement",
       "kind": "semantic",
       "question": "Does this agreement renew automatically, and what notice is needed to stop it?",
-      "expect": ["renew automatically for successive periods of twelve (12) months"]
+      "expect": [
+        "renew automatically for successive periods of twelve (12) months"
+      ]
     },
     {
       "id": "msa-03",
       "doc": "sample_agreement",
       "kind": "exact",
       "question": "What is the annual subscription fee?",
-      "expect": ["annual subscription fee of USD 480,000"]
+      "expect": [
+        "annual subscription fee of USD 480,000"
+      ]
     },
     {
       "id": "msa-04",
       "doc": "sample_agreement",
       "kind": "exact",
       "question": "Who signed on behalf of Cedarpoint Financial Group?",
-      "expect": ["Cedarpoint Financial Group Inc. by Daniel Okonkwo"]
+      "expect": [
+        "Cedarpoint Financial Group Inc. by Daniel Okonkwo"
+      ]
     },
     {
       "id": "msa-05",
       "doc": "sample_agreement",
       "kind": "exact",
       "question": "What is the company registration number of Northwind Analytics?",
-      "expect": ["company number 09488213"]
+      "expect": [
+        "company number 09488213"
+      ]
     },
     {
       "id": "msa-06",
       "doc": "sample_agreement",
-      "kind": "semantic",
+      "kind": "vocabulary",
       "question": "What is the uptime commitment and what happens if it is missed?",
-      "expect": ["availability of the hosted Services of at least 99.5%"]
+      "expect": [
+        "availability of the hosted Services of at least 99.5%"
+      ]
     },
     {
       "id": "msa-07",
       "doc": "sample_agreement",
       "kind": "exact",
       "question": "How long does the supplier have to report a personal data breach?",
-      "expect": ["within seventy-two (72) hours"]
+      "expect": [
+        "within seventy-two (72) hours"
+      ]
     },
     {
       "id": "msa-08",
       "doc": "sample_agreement",
       "kind": "semantic",
       "question": "What is the cap on each party's total liability?",
-      "expect": ["shall not exceed the total fees paid by Client in the twelve (12) months"]
+      "expect": [
+        "shall not exceed the total fees paid by Client in the twelve (12) months"
+      ]
     },
     {
       "id": "msa-09",
       "doc": "sample_agreement",
       "kind": "table",
       "question": "What is the annual fee for the Enterprise tier?",
-      "expect": ["Enterprise unlimited 960,000 one hour"]
+      "expect": [
+        "Enterprise unlimited 960,000 one hour"
+      ]
     },
     {
       "id": "msa-10",
       "doc": "sample_agreement",
       "kind": "table",
       "question": "How many seats are included in the Professional tier and what is its support response time?",
-      "expect": ["Professional 100 480,000 four hours"]
+      "expect": [
+        "Professional 100 480,000 four hours"
+      ]
     },
     {
       "id": "msa-11",
       "doc": "sample_agreement",
       "kind": "exact",
       "question": "Which law governs this agreement?",
-      "expect": ["governed by the laws of England and Wales"]
+      "expect": [
+        "governed by the laws of England and Wales"
+      ]
     },
     {
       "id": "msa-12",
       "doc": "sample_agreement",
       "kind": "semantic",
       "question": "How long do the confidentiality obligations last after the agreement ends?",
-      "expect": ["survive termination of this Agreement for a period of five (5) years"]
+      "expect": [
+        "survive termination of this Agreement for a period of five (5) years"
+      ]
     },
     {
       "id": "msa-13",
       "doc": "sample_agreement",
       "kind": "exact",
       "question": "How much can the supplier raise the fee at renewal?",
-      "expect": ["no more than the lesser of (a) four percent (4%)"]
+      "expect": [
+        "no more than the lesser of (a) four percent (4%)"
+      ]
     },
     {
       "id": "msa-14",
       "doc": "sample_agreement",
       "kind": "semantic",
       "question": "Can the agreement be terminated if a force majeure event drags on?",
-      "expect": ["Force Majeure event continues for more than sixty (60) consecutive days"]
+      "expect": [
+        "Force Majeure event continues for more than sixty (60) consecutive days"
+      ]
     },
     {
       "id": "msa-15",
       "doc": "sample_agreement",
       "kind": "exact",
       "question": "What must the supplier do with client data after termination?",
-      "expect": ["return or securely destroy all Client data within sixty (60) days"]
+      "expect": [
+        "return or securely destroy all Client data within sixty (60) days"
+      ]
     },
     {
       "id": "dis-01",
       "doc": "distractor_agreement_b",
       "kind": "exact",
       "question": "What is the annual licence charge under the software licence agreement?",
-      "expect": ["annual licence charge is EUR 315,000"]
+      "expect": [
+        "annual licence charge is EUR 315,000"
+      ]
     },
     {
       "id": "dis-02",
       "doc": "distractor_agreement_b",
       "kind": "exact",
       "question": "What does clause 7.2 of the software licence agreement say about assignment?",
-      "expect": ["7.2 Assignment. Neither party may assign, novate or otherwise transfer"]
+      "expect": [
+        "7.2 Assignment. Neither party may assign, novate or otherwise transfer"
+      ]
     },
     {
       "id": "dis-03",
       "doc": "distractor_agreement_b",
       "kind": "semantic",
       "question": "How quickly must a Severity 1 incident be responded to under the licence agreement?",
-      "expect": ["respond to a Severity 1 incident within one (1) hour"]
+      "expect": [
+        "respond to a Severity 1 incident within one (1) hour"
+      ]
     },
     {
       "id": "dis-04",
       "doc": "distractor_policy",
       "kind": "exact",
       "question": "How quickly must the accounts of departing staff be disabled?",
-      "expect": ["disabled within four (4) hours of the termination of employment"]
+      "expect": [
+        "disabled within four (4) hours of the termination of employment"
+      ]
     },
     {
       "id": "dis-05",
       "doc": "distractor_policy",
       "kind": "semantic",
       "question": "What are the recovery time and recovery point objectives for tier-one systems?",
-      "expect": ["recovery time objective for tier-one systems is four (4) hours"]
+      "expect": [
+        "recovery time objective for tier-one systems is four (4) hours"
+      ]
     },
     {
       "id": "dis-06",
       "doc": "distractor_policy",
       "kind": "exact",
       "question": "How long must critical vulnerabilities take to remediate?",
-      "expect": ["Critical vulnerabilities must be remediated within seven (7) days"]
+      "expect": [
+        "Critical vulnerabilities must be remediated within seven (7) days"
+      ]
     },
     {
       "id": "dis-07",
       "doc": "distractor_retail_2col",
       "kind": "layout",
       "question": "How did retail park footfall change compared with the high street?",
-      "expect": ["rose 3.8% against the same quarter last year, the sixth consecutive quarterly increase"]
+      "expect": [
+        "rose 3.8% against the same quarter last year, the sixth consecutive quarterly increase"
+      ]
     },
     {
       "id": "dis-08",
       "doc": "distractor_retail_2col",
       "kind": "layout",
       "question": "What is prime retail vacancy in the largest UK city centres?",
-      "expect": ["edged up to 9.4% in the third quarter, the first increase in seven quarters"]
+      "expect": [
+        "edged up to 9.4% in the third quarter, the first increase in seven quarters"
+      ]
+    },
+    {
+      "id": "hop-02",
+      "doc": "sample_agreement",
+      "kind": "multihop",
+      "question": "How long is the initial term and how much notice stops it renewing?",
+      "all_of": [
+        [
+          "initial term of thirty-six (36) months"
+        ],
+        [
+          "written notice of non-renewal not less than ninety (90) days"
+        ]
+      ]
+    },
+    {
+      "id": "hop-03",
+      "doc": "distractor_policy",
+      "kind": "multihop",
+      "question": "How quickly must an incident be reported, and how quickly is it triaged?",
+      "all_of": [
+        [
+          "reported to the security team within one (1) hour"
+        ],
+        [
+          "triages every report within two (2) hours"
+        ]
+      ]
+    },
+    {
+      "id": "hop-04",
+      "doc": "distractor_agreement_b",
+      "kind": "multihop",
+      "question": "What is the licence charge and what does support cost on top of it?",
+      "all_of": [
+        [
+          "annual licence charge is EUR 315,000"
+        ],
+        [
+          "twenty-two percent (22%) of the then-current licence charge"
+        ]
+      ]
+    },
+    {
+      "id": "cmp-01",
+      "docs": [
+        "sample_agreement",
+        "distractor_agreement_b"
+      ],
+      "kind": "comparative",
+      "question": "Compare the renewal terms of the two agreements — how much notice does each need?",
+      "all_of": [
+        [
+          "written notice of non-renewal not less than ninety (90) days"
+        ],
+        [
+          "not less than one hundred and twenty (120) days written notice"
+        ]
+      ]
+    },
+    {
+      "id": "cmp-02",
+      "docs": [
+        "sample_agreement",
+        "distractor_agreement_b"
+      ],
+      "kind": "comparative",
+      "question": "Which agreement has the higher availability commitment?",
+      "all_of": [
+        [
+          "availability of the hosted Services of at least 99.5%"
+        ],
+        [
+          "production availability of at least 99.9%"
+        ]
+      ]
+    },
+    {
+      "id": "cmp-03",
+      "docs": [
+        "sample_agreement",
+        "distractor_agreement_b"
+      ],
+      "kind": "comparative",
+      "question": "How does each agreement cap liability?",
+      "all_of": [
+        [
+          "shall not exceed the total fees paid by Client in the twelve (12) months"
+        ],
+        [
+          "shall not exceed one hundred and fifty percent (150%) of the charges"
+        ]
+      ]
+    },
+    {
+      "id": "cmp-04",
+      "docs": [
+        "sample_agreement",
+        "distractor_policy"
+      ],
+      "kind": "comparative",
+      "question": "What are the two different breach-notification deadlines across these documents?",
+      "all_of": [
+        [
+          "within seventy-two (72) hours"
+        ],
+        [
+          "breach notification obligation of no more than twenty-four (24) hours"
+        ]
+      ]
+    },
+    {
+      "id": "cmp-05",
+      "docs": [
+        "market_brief_2col",
+        "distractor_retail_2col"
+      ],
+      "kind": "comparative",
+      "question": "Compare vacancy in the logistics and retail markets.",
+      "all_of": [
+        [
+          "fell to 3.1% in the third quarter"
+        ],
+        [
+          "edged up to 9.4% in the third quarter"
+        ]
+      ]
     }
   ],
   "refusals": [

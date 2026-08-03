@@ -13,7 +13,8 @@ still retrievable. That test is the actual deliverable.
 WHAT IS IN THE ARCHIVE
   meta.json      what version wrote it, when, and what it contains
   scholar.db     the SQLite database (users, papers, answer logs)
-  users/         every per-user library: stored files, FAISS index, lexical index
+  workspaces/    every per-workspace library: stored files, FAISS + lexical index
+                 (in a v1 archive this directory is named `users/` instead)
 
 Both parts are needed and they must move together. The database says a paper
 exists; the data tree holds its vectors. Restoring one without the other gives a
@@ -36,10 +37,18 @@ from pathlib import Path
 from backend import library
 from backend.config import settings
 
-FORMAT_VERSION = 1
+# v1 archives hold per-USER library directories; v2 holds per-WORKSPACE ones.
+# Both are readable, because the correct advice before the workspace migration is
+# "take a backup first" — so v1 archives exist precisely for the moment they are
+# most likely to be needed. A v1 archive restores to the LEGACY location and
+# tells the operator to run the migration, rather than dropping user-numbered
+# directories where workspace-numbered ones belong.
+FORMAT_VERSION = 2
+READABLE_VERSIONS = (1, 2)
 META_NAME = "meta.json"
 DB_NAME = "scholar.db"
-USERS_DIR = "users"
+USERS_DIR = "users"           # v1 layout
+WORKSPACES_DIR = "workspaces"  # v2 layout
 
 
 class BackupError(RuntimeError):
@@ -61,20 +70,34 @@ def _stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
+def _count(path: Path) -> int:
+    return len(list(path.iterdir())) if path.exists() else 0
+
+
 def create(dest_dir: str | Path) -> Path:
-    """Write a compressed archive of the database and every user library."""
+    """Write a compressed archive of the database and every library.
+
+    Captures BOTH library roots when both exist. That matters most in exactly
+    the situation this tool is most needed: the correct advice before the
+    workspace migration is "take a backup first", and at that moment every
+    library still lives at the LEGACY path. An archive that only looked at the
+    new path would report success and contain none of the data at risk.
+    """
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
     db = sqlite_path()
-    users = Path(library.DATA_ROOT)
+    workspaces = Path(library.DATA_ROOT)
+    legacy = Path(library.LEGACY_DATA_ROOT)
 
     meta = {
         "format_version": FORMAT_VERSION,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "database": db.name,
         "has_database": db.exists(),
-        "n_user_libraries": len(list(users.iterdir())) if users.exists() else 0,
+        "n_workspace_libraries": _count(workspaces),
+        "n_legacy_libraries": _count(legacy),
     }
+    meta["n_libraries"] = meta["n_workspace_libraries"] + meta["n_legacy_libraries"]
 
     archive = dest_dir / f"scholar-{_stamp()}.tar.gz"
     with tarfile.open(archive, "w:gz") as tar:
@@ -84,8 +107,10 @@ def create(dest_dir: str | Path) -> Path:
             tar.add(meta_file, arcname=META_NAME)
         if db.exists():
             tar.add(db, arcname=DB_NAME)
-        if users.exists():
-            tar.add(users, arcname=USERS_DIR)
+        if workspaces.exists():
+            tar.add(workspaces, arcname=WORKSPACES_DIR)
+        if legacy.exists():
+            tar.add(legacy, arcname=USERS_DIR)
     return archive
 
 
@@ -111,9 +136,11 @@ def verify(archive: str | Path) -> dict:
     files that might be backups".
     """
     meta = read_meta(archive)
-    if meta.get("format_version") != FORMAT_VERSION:
+    version = meta.get("format_version")
+    if version not in READABLE_VERSIONS:
         raise BackupError(
-            f"archive format v{meta.get('format_version')} != v{FORMAT_VERSION} supported here"
+            f"archive format v{version} is not readable here "
+            f"(supported: {', '.join('v%d' % v for v in READABLE_VERSIONS)})"
         )
     with tarfile.open(archive, "r:gz") as tar:
         names = tar.getnames()
@@ -143,9 +170,11 @@ def restore(archive: str | Path, force: bool = False) -> dict:
     """
     meta = verify(archive)
     db = sqlite_path()
-    users = Path(library.DATA_ROOT)
+    workspaces = Path(library.DATA_ROOT)
+    legacy = Path(library.LEGACY_DATA_ROOT)
+    occupied = any(p.exists() and any(p.iterdir()) for p in (workspaces, legacy))
 
-    if not force and (db.exists() or (users.exists() and any(users.iterdir()))):
+    if not force and (db.exists() or occupied):
         raise BackupError(
             "refusing to restore over existing data — pass force=True (or --force) "
             "if you really mean to replace the current database and libraries"
@@ -169,13 +198,24 @@ def restore(archive: str | Path, force: bool = False) -> dict:
                 db.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(staged_db, db)
 
-            staged_users = staged / USERS_DIR
-            if staged_users.exists():
+            # Each library root goes back where it came from. `users/` holds
+            # user-numbered directories and belongs at the LEGACY path until the
+            # migration renumbers them — putting them at the workspace path
+            # would silently mismatch every id. An archive taken before the
+            # migration has only `users/`; one taken after has only
+            # `workspaces/`; one taken mid-migration has both.
+            for arcname, destination in (
+                (WORKSPACES_DIR, Path(library.DATA_ROOT)),
+                (USERS_DIR, Path(library.LEGACY_DATA_ROOT)),
+            ):
+                staged_libraries = staged / arcname
+                if not staged_libraries.exists():
+                    continue
                 # Replace wholesale rather than merging: a merge would leave
                 # documents that were deleted after the backup was taken, and a
                 # restore is supposed to reproduce a moment, not union with one.
-                shutil.rmtree(users, ignore_errors=True)
-                shutil.copytree(staged_users, users)
+                shutil.rmtree(destination, ignore_errors=True)
+                shutil.copytree(staged_libraries, destination)
 
     library._retrievers.clear()  # in-process caches now point at replaced files
     return meta
@@ -202,7 +242,8 @@ def main() -> int:
             archive = create(args.dest)
             meta = verify(archive)
             size_mb = archive.stat().st_size / 1_048_576
-            print(f"wrote {archive} ({size_mb:.1f} MB, {meta['n_user_libraries']} user libraries)")
+            print(f"wrote {archive} ({size_mb:.1f} MB, {meta['n_libraries']} librar"
+                  f"{'y' if meta['n_libraries'] == 1 else 'ies'})")
             print("verified OK")
         elif args.command == "verify":
             meta = verify(args.archive)
@@ -210,6 +251,10 @@ def main() -> int:
         else:
             meta = restore(args.archive, force=args.force)
             print(f"restored from {args.archive} (taken {meta['created_at']})")
+            if meta.get("n_legacy_libraries", 1 if meta.get("format_version") == 1 else 0):
+                print("This archive contains PRE-WORKSPACE libraries, restored to the "
+                      "legacy location.")
+                print("  Next: python -m backend.migrate --dry-run")
     except BackupError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

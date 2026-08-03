@@ -1,14 +1,19 @@
-"""Per-user document library: storage layout, indexing, retrieval scoping.
+"""Per-workspace document library: storage layout, indexing, retrieval scoping.
 
-Each user gets an isolated directory tree under data/users/<id>/:
+Each workspace gets an isolated directory tree under data/workspaces/<id>/:
     papers/<paper_id>.<ext> — the original upload, in its own format
-    index/index.faiss       — that user's FAISS index (ALL their papers)
+    index/index.faiss       — that workspace's FAISS index (ALL its documents)
     index/chunks.json       — chunk metadata, each chunk tagged by paper_id
+    index/lexical.db        — the FTS5 mirror of the same chunks
 
-One index PER USER (not one shared index filtered by user) means a user's data
-never mixes with anyone else's, and "delete my paper" is a local rebuild. This
-reuses the same ingest pipeline (parser -> chunker -> embedder -> store) that the
-CLI uses, so indexing behaves identically here.
+One index PER WORKSPACE, not one shared index filtered by a query parameter.
+That makes isolation a property of the storage layout rather than of remembering
+a WHERE clause: retrieval physically cannot return another workspace's passages,
+because it never opens their index. A filter can be forgotten in one code path;
+a directory cannot.
+
+Personal libraries are ordinary workspaces flagged `is_personal`, so there is
+exactly one storage and retrieval path rather than two that drift apart.
 """
 import re
 from pathlib import Path
@@ -24,21 +29,25 @@ from backend.store import append_to_store, remove_paper
 # Configurable, because the fallback is INSIDE the source tree: a deployment that
 # replaces the source on redeploy would take every user's library with it, with
 # no error to notice. Set DATA_ROOT to a mounted volume in any real deployment.
-DEFAULT_DATA_ROOT = Path(__file__).parent.parent / "data" / "users"
+DEFAULT_DATA_ROOT = Path(__file__).parent.parent / "data" / "workspaces"
 DATA_ROOT = Path(settings.data_root) if settings.data_root else DEFAULT_DATA_ROOT
 
-# One loaded Retriever per user, reused across their /ask calls (loading the
+# Where libraries lived before workspaces existed. Only the migration reads it.
+LEGACY_DATA_ROOT = Path(settings.data_root).parent / "users" if settings.data_root \
+    else Path(__file__).parent.parent / "data" / "users"
+
+# One loaded Retriever per workspace, reused across /ask calls (loading the
 # FAISS index + chunks.json every request would be wasteful). Invalidated
-# whenever the user's index changes, so it never serves a stale library.
+# whenever the workspace's index changes, so it never serves a stale library.
 _retrievers: dict[int, Retriever] = {}
 
 
-def user_index_dir(user_id: int) -> Path:
-    return DATA_ROOT / str(user_id) / "index"
+def workspace_index_dir(workspace_id: int) -> Path:
+    return DATA_ROOT / str(workspace_id) / "index"
 
 
-def user_papers_dir(user_id: int) -> Path:
-    return DATA_ROOT / str(user_id) / "papers"
+def workspace_papers_dir(workspace_id: int) -> Path:
+    return DATA_ROOT / str(workspace_id) / "papers"
 
 
 def slugify(name: str) -> str:
@@ -46,31 +55,31 @@ def slugify(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "paper"
 
 
-def invalidate(user_id: int) -> None:
-    _retrievers.pop(user_id, None)
+def invalidate(workspace_id: int) -> None:
+    _retrievers.pop(workspace_id, None)
 
 
-def get_retriever(user_id: int) -> Retriever | None:
-    """The user's retriever, or None if they have not indexed any papers yet."""
-    if not (user_index_dir(user_id) / "index.faiss").exists():
+def get_retriever(workspace_id: int) -> Retriever | None:
+    """The workspace's retriever, or None if nothing has been indexed yet."""
+    if not (workspace_index_dir(workspace_id) / "index.faiss").exists():
         return None
-    if user_id not in _retrievers:
-        _retrievers[user_id] = Retriever(user_index_dir(user_id))
-    return _retrievers[user_id]
+    if workspace_id not in _retrievers:
+        _retrievers[workspace_id] = Retriever(workspace_index_dir(workspace_id))
+    return _retrievers[workspace_id]
 
 
-def stored_path(user_id: int, paper_id: str) -> Path | None:
+def stored_path(workspace_id: int, paper_id: str) -> Path | None:
     """The stored file for a paper, whatever its format — or None if it's gone.
 
     Globbed rather than assembled, because the extension varies by format and
     `paper_id` is a slug that only this module mints (see `slugify`), so it can
     never contain a glob metacharacter.
     """
-    return next(iter(sorted(user_papers_dir(user_id).glob(f"{paper_id}.*"))), None)
+    return next(iter(sorted(workspace_papers_dir(workspace_id).glob(f"{paper_id}.*"))), None)
 
 
-def index_document(user_id: int, doc_path: Path, paper_id: str) -> int:
-    """Parse -> chunk -> embed -> append a document into the user's index.
+def index_document(workspace_id: int, doc_path: Path, paper_id: str) -> int:
+    """Parse -> chunk -> embed -> append a document into the workspace's index.
 
     Returns the number of chunks this document contributed, or 0 if it had no
     extractable text — an unOCR-able scan, or a file that is genuinely empty.
@@ -81,19 +90,19 @@ def index_document(user_id: int, doc_path: Path, paper_id: str) -> int:
     if not chunks:
         return 0
     vectors = embed([c.embed_text for c in chunks], progress=False)
-    append_to_store(chunks, vectors, user_index_dir(user_id))
-    # Mirror the same chunks into the user's lexical index. Both stores live in
+    append_to_store(chunks, vectors, workspace_index_dir(workspace_id))
+    # Mirror the same chunks into the workspace's lexical index. Both stores live in
     # the same directory and are written together, so they cannot drift apart.
-    lexical.index_chunks(chunks, user_index_dir(user_id))
-    invalidate(user_id)
+    lexical.index_chunks(chunks, workspace_index_dir(workspace_id))
+    invalidate(workspace_id)
     return len(chunks)
 
 
-def delete_paper_data(user_id: int, paper_id: str) -> None:
+def delete_paper_data(workspace_id: int, paper_id: str) -> None:
     """Remove a paper's chunks from both indexes and delete its stored file."""
-    remove_paper(user_index_dir(user_id), paper_id)
-    lexical.remove_paper(user_index_dir(user_id), paper_id)
-    path = stored_path(user_id, paper_id)
+    remove_paper(workspace_index_dir(workspace_id), paper_id)
+    lexical.remove_paper(workspace_index_dir(workspace_id), paper_id)
+    path = stored_path(workspace_id, paper_id)
     if path is not None:
         path.unlink(missing_ok=True)
-    invalidate(user_id)
+    invalidate(workspace_id)

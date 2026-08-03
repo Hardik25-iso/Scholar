@@ -54,6 +54,7 @@ def _citation_rows(citations: list[Citation]) -> list[dict]:
 def record(
     session: Session,
     user_id: int,
+    workspace_id: int,
     request: AskRequest,
     query: str,
     answer: Answer,
@@ -75,6 +76,7 @@ def record(
         fingerprint, n_chunks = index_fingerprint(index_dir)
         entry = AnswerLog(
             user_id=user_id,
+            workspace_id=workspace_id,
             question=request.question,
             query=query,
             answer=answer.answer,
@@ -99,11 +101,19 @@ def record(
         return None
 
 
-def list_for_user(session: Session, user_id: int, limit: int, offset: int) -> list[AnswerLog]:
+def list_for_workspace(
+    session: Session, workspace_id: int, limit: int, offset: int
+) -> list[AnswerLog]:
+    """Every answer drawn from this library, whoever asked it.
+
+    Workspace-scoped rather than user-scoped: the point of an audit trail in a
+    shared library is that a reviewer can see what the TEAM was told, not only
+    what they personally asked.
+    """
     return list(
         session.exec(
             select(AnswerLog)
-            .where(AnswerLog.user_id == user_id)
+            .where(AnswerLog.workspace_id == workspace_id)
             .order_by(AnswerLog.created_at.desc(), AnswerLog.id.desc())
             .offset(offset)
             .limit(limit)

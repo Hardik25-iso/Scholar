@@ -1,9 +1,12 @@
 """Library routes: upload a document, list my papers, delete one.
 
 All routes require the logged-in user (get_current_user); the mutating ones also
-require the CSRF header (require_csrf), consistent with the auth routes. A user
-can only ever see or delete their OWN papers — every query is filtered by
-user_id and delete verifies ownership before touching anything.
+require the CSRF header (require_csrf), consistent with the auth routes.
+
+Scope is the WORKSPACE, resolved by the get_current_workspace dependency, which
+proves membership before the route body runs. A document is visible to everyone
+in its workspace and invisible outside it — so the check is "are you a member",
+not "did you upload this". Deletion is narrower: see delete_paper.
 """
 from pathlib import Path
 
@@ -14,11 +17,12 @@ from sqlmodel import Session, select
 from backend import library
 from backend.auth import get_current_user, require_csrf
 from backend.db import get_session
-from backend.db_models import Paper, User
+from backend.db_models import ROLE_OWNER, Paper, User, Workspace
 from backend.models import PaperPublic
 from backend import parser
 from backend.parser import SUPPORTED_EXTENSIONS
 from backend.ratelimit import upload_limiter
+from backend.workspaces import get_current_workspace, require_membership
 
 router = APIRouter(prefix="/papers", tags=["papers"])
 
@@ -37,12 +41,16 @@ MEDIA_TYPES = {
 INLINE_EXTENSIONS = {".pdf", ".txt", ".md"}
 
 
-def _unique_paper_id(session: Session, user_id: int, stem: str) -> str:
-    """A slug unique within this user's library (appends -2, -3, ... on clash)."""
+def _unique_paper_id(session: Session, workspace_id: int, stem: str) -> str:
+    """A slug unique within this WORKSPACE (appends -2, -3, ... on clash).
+
+    Workspace-scoped rather than user-scoped: two members uploading files with
+    the same name must not collide on one stored path or one chunk tag.
+    """
     base = library.slugify(stem)
     taken = {
         p.paper_id
-        for p in session.exec(select(Paper).where(Paper.user_id == user_id)).all()
+        for p in session.exec(select(Paper).where(Paper.workspace_id == workspace_id)).all()
     }
     if base not in taken:
         return base
@@ -57,6 +65,7 @@ def _unique_paper_id(session: Session, user_id: int, stem: str) -> str:
 async def upload_paper(
     file: UploadFile,
     user: User = Depends(get_current_user),
+    workspace: Workspace = Depends(get_current_workspace),
     session: Session = Depends(get_session),
 ) -> Paper:
     # Indexing is the second-most expensive thing this app does (parse, OCR,
@@ -82,20 +91,20 @@ async def upload_paper(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "empty file")
 
     stem = Path(name).stem
-    paper_id = _unique_paper_id(session, user.id, stem)
+    paper_id = _unique_paper_id(session, workspace.id, stem)
 
     # Persist the file, then index it. Indexing has two failure modes and BOTH
     # must roll the saved file back, or the upload leaves an orphan on disk with
     # no matching DB row:
     #   - it raises (corrupt/unreadable file — PyMuPDF raises FileDataError),
     #   - it succeeds but yields nothing (a scan we could not OCR, or an empty file).
-    papers_dir = library.user_papers_dir(user.id)
+    papers_dir = library.workspace_papers_dir(workspace.id)
     papers_dir.mkdir(parents=True, exist_ok=True)
     doc_path = papers_dir / f"{paper_id}{suffix}"
     doc_path.write_bytes(data)
 
     try:
-        n_chunks = library.index_document(user.id, doc_path, paper_id)
+        n_chunks = library.index_document(workspace.id, doc_path, paper_id)
     except Exception as exc:
         # index_document writes to the FAISS store only as its last step, so a
         # failure here leaves the user's index untouched — only the file needs undoing.
@@ -115,8 +124,8 @@ async def upload_paper(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail)
 
     paper = Paper(
-        user_id=user.id, paper_id=paper_id, title=stem,
-        filename=name, n_chunks=n_chunks,
+        workspace_id=workspace.id, user_id=user.id,  # user_id = who uploaded it
+        paper_id=paper_id, title=stem, filename=name, n_chunks=n_chunks,
     )
     session.add(paper)
     session.commit()
@@ -126,18 +135,20 @@ async def upload_paper(
 
 @router.get("", response_model=list[PaperPublic])
 def list_papers(
-    user: User = Depends(get_current_user),
+    workspace: Workspace = Depends(get_current_workspace),
     session: Session = Depends(get_session),
 ) -> list[Paper]:
     return session.exec(
-        select(Paper).where(Paper.user_id == user.id).order_by(Paper.created_at.desc())
+        select(Paper)
+        .where(Paper.workspace_id == workspace.id)
+        .order_by(Paper.created_at.desc())
     ).all()
 
 
 @router.get("/{paper_id}/file")
 def get_paper_file(
     paper_id: int,
-    user: User = Depends(get_current_user),
+    workspace: Workspace = Depends(get_current_workspace),
     session: Session = Depends(get_session),
 ) -> FileResponse:
     """Serve a user's stored document (for the in-app source viewer).
@@ -149,9 +160,9 @@ def get_paper_file(
     same-site cookie — no CSRF needed on a GET.
     """
     paper = session.get(Paper, paper_id)
-    if paper is None or paper.user_id != user.id:
+    if paper is None or paper.workspace_id != workspace.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "paper not found")
-    path = library.stored_path(user.id, paper.paper_id)
+    path = library.stored_path(workspace.id, paper.paper_id)
     if path is None or not path.exists():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "file no longer on disk")
     suffix = path.suffix.lower()
@@ -168,11 +179,29 @@ def get_paper_file(
 def delete_paper(
     paper_id: int,
     user: User = Depends(get_current_user),
+    workspace: Workspace = Depends(get_current_workspace),
     session: Session = Depends(get_session),
 ) -> None:
+    """Remove a document from the workspace library.
+
+    Deletion is deliberately NARROWER than reading. Everyone in a workspace can
+    see every document, but only the person who uploaded it or a workspace owner
+    can destroy it — otherwise any member could silently delete a colleague's
+    work from a shared library, and there is no undo.
+    """
     paper = session.get(Paper, paper_id)
-    if paper is None or paper.user_id != user.id:  # ownership check
+    if paper is None or paper.workspace_id != workspace.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "paper not found")
-    library.delete_paper_data(user.id, paper.paper_id)
+
+    membership = require_membership(session, user, workspace.id)
+    if paper.user_id != user.id and membership.role != ROLE_OWNER:
+        # 403, not 404: the caller can already see this document in the list, so
+        # hiding it would turn a permission error into an apparent bug.
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "only the member who uploaded this document, or a workspace owner, can delete it",
+        )
+
+    library.delete_paper_data(workspace.id, paper.paper_id)
     session.delete(paper)
     session.commit()

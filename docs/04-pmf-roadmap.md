@@ -471,7 +471,80 @@ document indexes without timing out.
 
 ---
 
-### Phase 5 — Teams *(2 weeks)*
+### Phase 5 — Teams *(2 weeks)* — **DONE**
+
+The highest-risk step in this roadmap, gated behind Phase 0's tests and Phase 4's backups
+specifically so it could be attempted safely.
+
+- **Schema — DONE.** `Workspace`, `Membership(user, workspace, role)`, `Invitation`. `Paper` and
+  `AnswerLog` gain `workspace_id`; `User` gains `current_workspace_id`. A personal library is an
+  ordinary workspace flagged `is_personal`, so there is exactly **one** storage, retrieval and
+  authorisation path rather than two that drift apart.
+- **Storage migration — DONE.** `data/users/<user_id>/` → `data/workspaces/<workspace_id>/`.
+- **Authorisation — DONE.** Ownership checks became membership checks, resolved by a single
+  `get_current_workspace` dependency. Scope comes from the user's active workspace, **not** a
+  request parameter, so no route can forget to scope itself and no client can point itself at
+  another library by editing an id. Absence of membership is 404, never 403.
+- **Invitations and roles — DONE.** Two roles, `owner` and `member`, because there is exactly one
+  privileged action (managing who else is in the workspace); a finer grid would invent distinctions
+  nothing enforces.
+
+#### Three deliberate authorisation choices
+
+1. **Deletion is narrower than reading.** Everyone in a workspace sees every document, but only the
+   uploader or an owner can destroy one. Otherwise any member could silently delete a colleague's
+   work from a shared library, and there is no undo.
+2. **An invitation is not a bearer token.** The invited email must match the accepting account —
+   otherwise a forwarded link is a public join link wearing an invitation's clothes.
+3. **The last owner cannot be removed.** A workspace with no owner has documents nobody can manage
+   and members nobody can add, recoverable only by database surgery.
+
+#### The migration, and what rehearsing it found
+
+Built to the rules that make a migration survivable: idempotent, `--dry-run` first, copy-verify-then-
+remove (an interruption leaves both copies, never neither), and refusal to run on real data without
+`--i-have-a-backup`. Never a recursive delete of the legacy root — an unaccounted-for directory is
+reported and left alone.
+
+**Rehearsing it against a copy of the real database found three bugs, all in the safety machinery
+itself.** None would have appeared in unit tests, because all three only occur on a *pre-migration*
+database:
+
+| Bug | Why it mattered |
+|---|---|
+| `_anything_at_risk()` queried `Paper` through the ORM | The backup gate crashed on exactly the database it exists to protect — every ORM query names `workspace_id`, which does not exist yet. Now raw SQL. |
+| `backup create` reported **"0 libraries"** | It only looked at the new workspace path, so the backup you are *told to take before migrating* contained none of the data at risk. Now captures both roots. |
+| `--dry-run` crashed | The one command someone runs when they are nervous was the one that could not run. Now reads through raw SQL. |
+
+Verified end to end on a copy of the real data: backup → dry run → migrate → serve. Six accounts
+migrated, libraries moved under their workspace ids, files byte-identical, and the migrated library
+still served through the API.
+
+#### A test isolation breach, found and fixed
+
+`conftest.py` redirected `library.DATA_ROOT` but not the newly-added `LEGACY_DATA_ROOT`, so the
+migration tests wrote fixture directories into the developer's **real** `data/users`. Four stray
+files, no damage to existing data (verified by content and by an unchanged database hash), removed.
+The guard now asserts over *every* writable root, so the next one added fails loudly instead of
+being noticed later as stray files.
+
+**Acceptance — met.** Two users in one workspace share a library and both can retrieve from it; a
+non-member gets 404 and **zero leaked passages**; the existing isolation tests still pass, extended
+to workspaces. 251 tests green; 27/27 through a real server against migrated data.
+
+#### Not done
+
+- **No workspace UI.** The API client is typed and complete (`listWorkspaces`, `createWorkspace`,
+  `activateWorkspace`, `inviteMember`, …), but there is no switcher in the interface yet, so teams
+  are currently reachable only through the API.
+- **Invitation delivery** shares the password-reset gap: no mail provider, so the token is logged
+  and also returned to the *inviter* to pass on by hand. That return value is a stated stopgap and
+  must be removed the moment mail is wired up — a token in an API response is a credential in a
+  place credentials do not belong.
+
+---
+
+### Phase 5 — original plan *(superseded by the section above)*
 
 - **Schema** — `Workspace`, `Membership(user, workspace, role)`; `Paper` gains `workspace_id`.
 - **Storage migration** — `data/users/<id>/` → `data/workspaces/<id>/`, with a migration for
@@ -485,7 +558,78 @@ isolation tests still pass, extended to workspaces.
 
 ---
 
-### Phase 6 — Agentic research layer *(2 weeks)* — *the WAT Agents layer*
+### Phase 6 — Agentic research layer — **GATED: NOT BUILT, on the evidence**
+
+This phase was always conditional: *"only for the query class the deterministic workflow
+demonstrably fails."* That condition has now been measured, and **it is not met.** The agent is not
+built, and this section records why — so the decision is revisitable rather than forgotten.
+
+#### What was measured
+
+The eval gained a multi-part scoring mode. A question needing evidence from several passages only
+counts as a hit when **every** piece is present in the top k — scoring it on the first fragment
+would reward handing the model enough to write a confident, incomplete answer. Nine multi-hop and
+comparative questions were added over the existing corpus, including cross-document comparisons
+between the two agreements.
+
+`k=5`, `candidates=20`, n=51 over 76 chunks:
+
+| kind | hit@5 | of achievable | n |
+|---|---|---|---|
+| layout | 100% | 100% | 7 |
+| exact | 100% | 92% | 19 |
+| table | 100% | 88% | 4 |
+| semantic | 100% | 85% | 11 |
+| **multihop** (within a document) | **100%** | — | 3 |
+| **comparative** (across documents) | **80%** | **63%** | 5 |
+| **vocabulary** | **0%** | **0%** | 2 |
+
+*"of achievable" matters:* a question needing N passages cannot complete before rank N, so its best
+possible MRR is 1/N. Comparing a comparative question's raw MRR of 0.317 against an exact question's
+0.921 compares a 0.5 ceiling with a 1.0 one and means nothing. The eval now reports attainment
+against the ceiling for exactly this reason.
+
+#### Why the agent is not justified
+
+1. **Within-document multi-hop already works — 100%.** The deterministic path retrieves both halves
+   of "what is the commitment, and what happens if it is missed" without help.
+2. **Cross-document comparison is the weakest class but is not failing.** 80% at k=5, and **100% at
+   k=12**. The evidence is retrievable; it is simply spread deeper in the list because a comparison
+   inherently needs one passage per document. That is an argument for an adaptive `k`, not for an
+   LLM planning loop.
+3. **The one genuinely broken class is not one an agent fixes.** `vocabulary` scores **0%** — and
+   decomposing the question into sub-questions would decompose the same unmatched words.
+
+#### The real finding: a distinct failure mode, previously miscounted
+
+Two questions fail because the query and the passage **share no rare term**: the document says
+*availability*, the question says *uptime*; the answer contains *Adam*, the question says *optimizer*.
+Lexical search cannot help — it only helps when the rare token is in the **query**, not the answer —
+and the embedder does not bridge the gap either. These were sitting inside the `semantic` bucket,
+dragging it down and hiding the fact that everything else in it now scores 100%.
+
+**The next retrieval work is query expansion, not an agent.** It addresses the only class at 0%.
+
+#### Two mistakes this investigation corrected
+
+- **"The reranker is the bottleneck" was wrong.** That came from reading an aggregate (stage 1 100%,
+  stage 2 95.3%). Per question, the reranker **promotes 9, demotes 4, and loses 2** — strongly net
+  positive. Both losses are the vocabulary cases, where the gold passage genuinely scores low
+  (−8.4 and −11.1) because it does not look like an answer to the question as asked.
+- **One "multi-hop" question was not multi-hop.** Both of `hop-01`'s required spans live in the
+  **same chunk**, so it measured a synonym gap while wearing a multi-hop label. Removed as a
+  duplicate of `msa-06`. The eval now flags attainment above 100% precisely because that means the
+  labelled parts shared a passage — the label, not the retriever, was describing the difficulty.
+
+#### When to revisit
+
+Build the agent when a measured class actually fails: comparative dropping below ~70% at a realistic
+`k` on a corpus of thousands of chunks, or a new class (multi-step reasoning over retrieved numbers)
+scoring near zero. The questions are in the eval now, so that check is one command.
+
+---
+
+### Phase 6 — original plan *(retained for reference; superseded by the gate above)*
 
 Only now, and only for the query class the deterministic workflow demonstrably fails.
 

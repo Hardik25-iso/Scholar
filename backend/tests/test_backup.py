@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from backend import backup, library
 from backend.backup import BackupError
-from backend.tests.conftest import csrf
+from backend.tests.conftest import csrf, workspace_id
 
 
 def _upload(client: TestClient, data: bytes, name: str = "paper.pdf"):
@@ -37,7 +37,7 @@ def test_backup_contains_both_the_database_and_the_libraries(
         names = tar.getnames()
     assert "meta.json" in names
     assert "scholar.db" in names
-    assert any(n.startswith("users/") for n in names)
+    assert any(n.startswith("workspaces/") for n in names)
 
 
 @pytest.mark.slow
@@ -46,7 +46,7 @@ def test_a_fresh_archive_verifies(alice: TestClient, text_pdf: bytes, tmp_path: 
     meta = backup.verify(backup.create(tmp_path))
     assert meta["format_version"] == backup.FORMAT_VERSION
     assert meta["has_database"] is True
-    assert meta["n_user_libraries"] >= 1
+    assert meta["n_libraries"] >= 1
 
 
 def test_verify_rejects_something_that_is_not_a_backup(tmp_path: Path):

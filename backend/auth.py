@@ -131,6 +131,14 @@ def register(body: RegisterRequest, response: Response, session: Session = Depen
     session.add(user)
     session.commit()
     session.refresh(user)
+    # Personal libraries are ordinary workspaces, so every account has one from
+    # the start — there is no "user with no workspace" state for routes to
+    # handle. Imported here rather than at module scope because workspaces.py
+    # imports get_current_user from this module.
+    from backend.workspaces import ensure_personal_workspace
+
+    ensure_personal_workspace(session, user)
+    session.refresh(user)
     _set_auth_cookies(response, user.id)  # log them straight in
     return user
 

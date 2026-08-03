@@ -6,12 +6,20 @@ the wire". A User here never leaves the backend with its hashed_password.
 """
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, Text
+from sqlalchemy import Column, Text, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+# Workspace roles. Two, not four: there is exactly one privileged action
+# (managing who else is in the workspace), so a finer grid would be inventing
+# distinctions nothing yet enforces.
+ROLE_OWNER = "owner"
+ROLE_MEMBER = "member"
+ROLES = (ROLE_OWNER, ROLE_MEMBER)
 
 
 class User(SQLModel, table=True):
@@ -22,17 +30,81 @@ class User(SQLModel, table=True):
     hashed_password: str  # bcrypt hash — never the plaintext (set in Slice B)
     created_at: datetime = Field(default_factory=_utcnow)
 
+    # Which workspace this account's requests act on. Every user has a personal
+    # workspace created at sign-up, so this is only null in the instant between
+    # inserting the user and creating it.
+    current_workspace_id: int | None = Field(default=None, foreign_key="workspace.id")
 
-class Paper(SQLModel, table=True):
-    """One uploaded paper belonging to a user.
 
-    The FAISS chunks live on disk (per-user index) tagged with `paper_id`; this
-    row is the catalogue entry that lets us list a library and map a citation's
-    paper_id back to a human title. `paper_id` is unique WITHIN a user.
+class Workspace(SQLModel, table=True):
+    """A shared library. The unit documents, indexes and answers belong to.
+
+    A user's own documents live in a `personal` workspace rather than in a
+    special no-workspace case — one code path for storage, retrieval and
+    authorisation instead of two that can drift.
     """
 
     id: int | None = Field(default=None, primary_key=True)
+    name: str
+    # Personal workspaces cannot be left or renamed away, and are not offered as
+    # a place to invite people — flagged rather than inferred from having one
+    # member, because a team workspace can legitimately have one member too.
+    is_personal: bool = Field(default=False)
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+class Membership(SQLModel, table=True):
+    """Who may act in a workspace, and with what authority.
+
+    This row IS the authorisation check. Every workspace-scoped request resolves
+    one, and its absence is indistinguishable from the workspace not existing.
+    """
+
+    __table_args__ = (UniqueConstraint("user_id", "workspace_id", name="uq_membership"),)
+
+    id: int | None = Field(default=None, primary_key=True)
     user_id: int = Field(index=True, foreign_key="user.id")
+    workspace_id: int = Field(index=True, foreign_key="workspace.id")
+    role: str = Field(default=ROLE_MEMBER)
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+class Invitation(SQLModel, table=True):
+    """A pending offer to join a workspace.
+
+    Keyed by EMAIL rather than by user id, so someone can be invited before they
+    have an account. Only the token's hash is stored, exactly as for password
+    resets — a leaked database must not hand over usable invitations.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    workspace_id: int = Field(index=True, foreign_key="workspace.id")
+    email: str = Field(index=True)
+    role: str = Field(default=ROLE_MEMBER)
+    token_hash: str = Field(index=True, unique=True)
+    invited_by_user_id: int = Field(foreign_key="user.id")
+    expires_at: datetime
+    created_at: datetime = Field(default_factory=_utcnow)
+    accepted_at: datetime | None = None
+    revoked_at: datetime | None = None
+
+
+class Paper(SQLModel, table=True):
+    """One uploaded document belonging to a WORKSPACE.
+
+    The FAISS chunks live on disk (per-workspace index) tagged with `paper_id`;
+    this row is the catalogue entry that lets us list a library and map a
+    citation's paper_id back to a human title. `paper_id` is unique WITHIN a
+    workspace.
+
+    `user_id` is retained and now means "who uploaded it" — not who may see it,
+    which is decided by workspace membership. Deliberately not renamed: a column
+    rename buys nothing here and complicates the migration of live data.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    workspace_id: int = Field(default=0, index=True, foreign_key="workspace.id")
+    user_id: int = Field(index=True, foreign_key="user.id")  # uploader
     paper_id: str = Field(index=True)  # slug used to tag chunks + name the file
     title: str                         # human-readable (original filename stem)
     filename: str                      # original upload filename
@@ -84,7 +156,8 @@ class AnswerLog(SQLModel, table=True):
     """
 
     id: int | None = Field(default=None, primary_key=True)
-    user_id: int = Field(index=True, foreign_key="user.id")
+    user_id: int = Field(index=True, foreign_key="user.id")   # who asked
+    workspace_id: int = Field(default=0, index=True, foreign_key="workspace.id")
     created_at: datetime = Field(default_factory=_utcnow, index=True)
 
     question: str                      # exactly what the user typed

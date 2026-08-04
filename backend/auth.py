@@ -72,6 +72,7 @@ def _issue_refresh_token(
     ending a session early. Returns the token and its record id, which the
     access token carries as `sid`.
     """
+    _prune_expired_refresh_tokens(session, user_id)
     token = create_refresh_token(str(user_id))
     record = RefreshToken(
         user_id=user_id,
@@ -105,6 +106,36 @@ def _set_auth_cookies(
         samesite=settings.cookie_samesite, secure=settings.cookie_secure,
         path=REFRESH_PATH,
     )
+
+
+def _prune_expired_refresh_tokens(session: Session, user_id: int) -> None:
+    """Drop this user's dead rows. Called when one is issued, so the table stays
+    bounded without a scheduler to deploy and monitor.
+
+    Only EXPIRED rows go. A revoked row that has not expired yet must stay:
+    it is exactly what reuse detection reads, and deleting it would turn a
+    replayed stolen token back into a plain 401 with nothing noticed. An expired
+    one carries no such signal — the token it describes is refused on age alone.
+
+    Per user rather than globally: the work stays proportional to the account
+    doing it, so no single request pays for the whole table.
+    """
+    now = datetime.now(timezone.utc)
+    for record in session.exec(
+        select(RefreshToken).where(
+            RefreshToken.user_id == user_id, RefreshToken.expires_at < now
+        )
+    ).all():
+        # A pruned row may still be named as some older row's successor. Clear
+        # the link first — a dangling replaced_by_id would point at nothing and
+        # break the chain reuse detection walks.
+        for parent in session.exec(
+            select(RefreshToken).where(RefreshToken.replaced_by_id == record.id)
+        ).all():
+            parent.replaced_by_id = None
+            session.add(parent)
+        session.delete(record)
+    session.commit()
 
 
 def _live_refresh_token(session: Session, token: str) -> RefreshToken | None:

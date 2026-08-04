@@ -837,8 +837,12 @@ family. `init_db` was rehearsed against a **copy of the real database** — it a
 (and, on that old copy, every post-Phase-4 table) and loses nothing; 6 users and 1 paper intact.
 295 tests green, 11 new; real data untouched.
 
-**Not done:** nothing prunes expired `RefreshToken` rows yet. They are inert once expired, so this
-is table growth, not a correctness or security issue.
+**Pruning.** Every login and every refresh writes a row — roughly 48 a day per active user at a
+30-minute access token, so the table only grows. Expired rows for that user are dropped whenever one
+is issued, which keeps it bounded with no scheduler to deploy and monitor, and keeps the work
+proportional to the account doing it. Revoked-but-unexpired rows are deliberately KEPT: that row
+*is* the reuse-detection signal, and dropping it would turn a replayed stolen token back into a
+plain 401 with nothing noticed.
 
 ---
 

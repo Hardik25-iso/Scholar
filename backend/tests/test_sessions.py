@@ -279,6 +279,38 @@ def test_rotation_records_which_token_replaced_which(alice: TestClient):
     assert records[1].revoked_at is None
 
 
+def test_expired_rows_are_pruned_when_a_new_token_is_issued(alice: TestClient):
+    """Every login and every refresh writes a row — roughly 48 a day per user at
+    a 30-minute access token. Without pruning the table only grows."""
+    with Session(engine) as session:
+        for _ in range(3):
+            session.add(RefreshToken(
+                user_id=1, token_hash=f"dead-{_}",
+                expires_at=datetime.now(timezone.utc) - timedelta(days=1),
+            ))
+        session.commit()
+        assert len(session.exec(select(RefreshToken)).all()) == 4
+
+    alice.post("/auth/refresh", headers=csrf(alice))
+
+    with Session(engine) as session:
+        remaining = session.exec(select(RefreshToken)).all()
+    assert [r.token_hash for r in remaining if r.token_hash.startswith("dead-")] == []
+    assert len(remaining) == 2, "the spent and the fresh token should both survive"
+
+
+def test_pruning_keeps_revoked_tokens_that_have_not_expired(alice: TestClient):
+    """A revoked-but-unexpired row IS the reuse-detection signal. Dropping it
+    would turn a replayed stolen token back into a plain 401 with nothing seen."""
+    stolen = alice.cookies.get("refresh_token")
+    alice.post("/auth/refresh", headers=csrf(alice))   # spends `stolen`
+    alice.post("/auth/refresh", headers=csrf(alice))   # issues again, prunes
+
+    force_cookie(alice, "refresh_token", stolen)
+    assert alice.post("/auth/refresh", headers=csrf(alice)).status_code == 401
+    assert live_tokens() == [], "the replay was no longer recognised as reuse"
+
+
 def test_an_expired_stored_token_is_refused(alice: TestClient):
     """Belt and braces: the JWT `exp` and the row's `expires_at` should agree,
     but the row is the one that governs."""

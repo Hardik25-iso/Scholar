@@ -16,7 +16,9 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session, select
 
+from backend import mailer
 from backend.auth import get_current_user, require_csrf
+from backend.config import settings
 from backend.db import get_session
 from backend.db_models import (
     ROLE_OWNER, Invitation, Membership, User, Workspace,
@@ -32,19 +34,41 @@ router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 log = logging.getLogger(__name__)
 
 
-def deliver_invitation(email: str, workspace: Workspace, token: str) -> None:
-    """Get an invitation to its recipient.
+INVITE_SUBJECT = "You have been invited to {workspace} on Scholar"
 
-    NOT IMPLEMENTED, same as password-reset delivery and for the same reason:
-    no mail provider is configured, so the token is logged. This is the seam —
-    wiring a provider replaces this body and nothing else. Until then the token
-    is also returned to the INVITER (never to anyone else), so they can pass it
-    on by hand; that is a deliberate, stated stopgap rather than a silent one.
+INVITE_BODY = """\
+{inviter} invited you to the "{workspace}" workspace on Scholar, where you will
+be able to read and question its documents.
+
+Open this link to accept:
+
+{url}
+
+The invitation expires in {days} days and can only be accepted by {email}.
+If you were not expecting it, you can ignore this message.
+"""
+
+
+def deliver_invitation(email: str, workspace: Workspace, inviter: User, token: str) -> bool:
+    """Get an invitation to its recipient. Returns whether mail actually went out.
+
+    The return value is load-bearing: the route hands the token back to the
+    INVITER only when this is False. An invitation token is a credential, and a
+    credential in an API response is a stopgap for the case where there is no
+    other way to deliver it — not a permanent part of the contract.
     """
+    if mailer.configured():
+        body = INVITE_BODY.format(
+            inviter=inviter.email, workspace=workspace.name, email=email,
+            url=mailer.link("/join", token), days=settings.invitation_expire_days,
+        )
+        return mailer.send(email, INVITE_SUBJECT.format(workspace=workspace.name), body)
+
     log.warning(
         "WORKSPACE INVITE for %s to %r — no mail provider configured, token logged: %s",
         email, workspace.name, token,
     )
+    return False
 
 
 def _public(workspace: Workspace, role: str, is_current: bool) -> WorkspacePublic:
@@ -165,13 +189,16 @@ def invite_member(
     invitation, token = workspaces.create_invitation(
         session, workspace, user, email=body.email, role=body.role
     )
-    deliver_invitation(body.email, workspace, token)
-    # The token goes back to the INVITER only, because delivery is not wired up
-    # yet. Documented as a stopgap in deliver_invitation; it must be removed the
-    # moment a mail provider exists.
+    sent = deliver_invitation(body.email, workspace, user, token)
+    # The token goes back to the INVITER only when we could not deliver it
+    # ourselves — then it is the only way the invitee can ever receive it. Once
+    # mail is configured it stays out of the response entirely, because an
+    # invitation token is a credential and a credential should travel to exactly
+    # one person by exactly one route.
     return InvitationCreated(
         id=invitation.id, email=invitation.email, role=invitation.role,
-        expires_at=invitation.expires_at, token=token,
+        expires_at=invitation.expires_at, delivered=sent,
+        token=None if sent else token,
     )
 
 

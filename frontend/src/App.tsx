@@ -2,7 +2,10 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
 import ProtectedRoute from "./auth/ProtectedRoute";
 import AuthForm from "./pages/AuthForm";
+import ForgotPassword from "./pages/ForgotPassword";
+import JoinWorkspace from "./pages/JoinWorkspace";
 import Landing from "./pages/Landing";
+import ResetPassword from "./pages/ResetPassword";
 import Workspace from "./pages/Workspace";
 
 /** Public routes bounce to /app when already authenticated. */
@@ -20,9 +23,17 @@ export default function App() {
       <Route path="/login" element={<PublicOnly><AuthForm mode="login" /></PublicOnly>} />
       <Route path="/signup" element={<PublicOnly><AuthForm mode="signup" /></PublicOnly>} />
 
+      {/* Password recovery. Reached from an emailed link, so both must work for
+          a signed-out visitor — that is the entire situation they exist for. */}
+      <Route path="/forgot" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
+      <Route path="/reset" element={<PublicOnly><ResetPassword /></PublicOnly>} />
+
       {/* Protected app */}
       <Route element={<ProtectedRoute />}>
         <Route path="/app" element={<Workspace />} />
+        {/* Joining names an account, so it requires one. ProtectedRoute carries
+            the invite link through sign-in rather than dropping it. */}
+        <Route path="/join" element={<JoinWorkspace />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />

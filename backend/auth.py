@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Response, status
 from sqlmodel import Session, select
 
+from backend import mailer
 from backend.config import settings
 from backend.db import get_session
 from backend.db_models import PasswordResetToken, User
@@ -80,22 +81,47 @@ def _clear_auth_cookies(response: Response) -> None:
                            samesite=settings.cookie_samesite, secure=settings.cookie_secure)
 
 
-def deliver_reset_token(email: str, token: str) -> None:
-    """Get a reset token to its owner.
+RESET_SUBJECT = "Reset your Scholar password"
 
-    NOT IMPLEMENTED — and that is stated rather than faked. There is no mail
-    provider configured, so the token is written to the server log, which is
-    workable for local development and completely unacceptable in production:
-    anyone who can read the logs can take over any account.
+RESET_BODY = """\
+Someone asked to reset the Scholar password for {email}.
 
-    This function is the seam. Wiring a provider means replacing this body and
-    nothing else. Until it is replaced, password reset must not be exposed to
-    real users — the route works, the delivery does not.
+Open this link to choose a new one:
+
+{url}
+
+The link works once and expires in {minutes} minutes. If you did not ask for
+this, you can ignore this message — your password has not changed.
+"""
+
+
+def deliver_reset_token(email: str, token: str) -> bool:
+    """Get a reset token to its owner. Returns whether mail actually went out.
+
+    With SMTP configured this sends a one-time link. With no provider it falls
+    back to logging the token, which is workable on a laptop and an
+    account-takeover vector on a server: anyone who can read the logs can take
+    over any account. The fallback therefore says so at WARNING level every
+    time, so an unconfigured production deploy is noisy rather than silent.
     """
+    if mailer.configured():
+        url = mailer.link("/reset", token)
+        body = RESET_BODY.format(
+            email=email, url=url, minutes=settings.reset_token_expire_minutes
+        )
+        if mailer.send(email, RESET_SUBJECT, body):
+            return True
+        # Delivery was configured and still failed. Do NOT fall through to
+        # logging the token — configuring mail is the operator saying tokens
+        # must not appear in logs, and a transient SMTP outage does not revoke
+        # that. The user retries; the error is already logged by mailer.send.
+        return False
+
     log.warning(
         "PASSWORD RESET for %s — no mail provider configured, token logged instead: %s",
         email, token,
     )
+    return False
 
 
 def get_current_user(

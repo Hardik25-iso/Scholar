@@ -92,5 +92,31 @@ class Settings(BaseSettings):
     # directory a scanned PDF is rejected with a clear 422, not a crash.
     tessdata_prefix: str = ""
 
+    # ——— Outbound email ———
+    #
+    # Empty smtp_host means "no mail provider". The app still runs; password
+    # resets and invitations fall back to logging their token and SAY SO rather
+    # than pretending a message went out. See backend/mailer.py.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    # STARTTLS on 587 (the common case) vs implicit TLS on 465. Turn starttls
+    # off only for a relay on localhost — over the internet it sends the SMTP
+    # password in clear text.
+    smtp_starttls: bool = True
+    smtp_ssl: bool = False
+    # A hung mail server must not hold an HTTP worker open indefinitely.
+    smtp_timeout: int = 10
+    # The From address. Required alongside smtp_host — a message with no sender
+    # is rejected by every provider, so treating it as optional would only move
+    # the failure to send time.
+    mail_from: str = ""
+
+    # Where links in email point. Defaults to frontend_origin, which is right in
+    # development and wrong the first time this is deployed behind a real
+    # domain — the CORS origin and the public URL are not always the same thing.
+    public_app_url: str = ""
+
 
 settings = Settings()

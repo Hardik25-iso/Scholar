@@ -444,11 +444,7 @@ Prerequisite for any external user, and for Phase 5 — team data multiplies the
   but the previous refresh token stays valid until it expires — a stolen one cannot be revoked.
   Real rotation needs server-side token state (a table like `PasswordResetToken`), which is a
   contained piece of work but was not in scope here.
-- **Reset-link delivery.** `auth.deliver_reset_token` logs the token instead of emailing it,
-  because no mail provider is configured. It is written as a seam — wiring a provider means
-  replacing that function body and nothing else — and it says plainly in its own docstring that
-  password reset must not be exposed to real users until it is replaced. No reset UI was built, on
-  purpose: a form promising an email that never arrives is worse than no form.
+- ~~**Reset-link delivery.**~~ **Done — see "Mail delivery" below.**
 - **`cookie_secure=True` / `SameSite=None`** remain settings, correct for the eventual HTTPS
   deployment and wrong for local development. Flipping them is a deploy-time change, not a code one.
 
@@ -722,6 +718,75 @@ measures what actually ships instead of a variant nobody runs.
 Build the agent when a measured class actually fails: comparative dropping below ~70% at a realistic
 `k` on a corpus of thousands of chunks, or a new class (multi-step reasoning over retrieved numbers)
 scoring near zero. The questions are in the eval now, so that check is one command.
+
+---
+
+### Mail delivery — password reset and invitations now reach a human
+
+Two features were complete on the server and unusable in practice. `/auth/forgot` minted a valid
+reset token and wrote it to the log; `/workspaces/{id}/invitations` minted an invite token and
+handed it back to the inviter to pass on by hand. Both worked; neither reached the person it was
+for. A forgotten password was still a permanent lockout.
+
+`backend/mailer.py` is the delivery layer — **stdlib `smtplib` only, no new dependency**. Three
+properties it exists to guarantee:
+
+- **Sending never raises.** `send()` returns a bool. A dead mail server must not 500 `/auth/forgot`,
+  because that route answers a uniform 202 specifically so it cannot be used to test who has an
+  account here — and an error that only appears for *real* addresses would restore the oracle the
+  202 was hiding.
+- **Unconfigured is a state, not an error.** With `smtp_host` empty the app runs exactly as before,
+  logs the token, and says at WARNING level that it did so.
+- **The SMTP password is only sent after STARTTLS.** Asserted by a test that records call ordering
+  against a fake transport, because getting this backwards puts the credential on the wire in clear
+  and nothing about the happy path would look different.
+
+#### The token stopped travelling in the API response
+
+`InvitationCreated.token` used to be unconditional, with a comment saying it must be removed the
+moment a mail provider existed. It now returns `null` whenever `delivered` is true. `delivered` is
+a separate field rather than something to infer from the null: *"we emailed them"* and *"here is a
+code to send them yourself"* are different sentences to put in front of a user, and the UI now says
+whichever one is true.
+
+The two features degrade **differently on a send failure**, on purpose:
+
+| | mail configured, send fails | no mail configured |
+|---|---|---|
+| Password reset | token withheld; user retries | token logged, loudly |
+| Invitation | token returned to the inviter | token returned to the inviter |
+
+An invitation has a safe human fallback — the inviter already knows who they invited. A reset does
+not: falling back to the log would quietly undo the operator's decision that tokens must not appear
+there, and a transient outage is not a licence to do that.
+
+#### The links had to land somewhere
+
+An emailed link into a page that does not exist is worse than no email, so this also built the
+frontend it needs: `/forgot`, `/reset`, `/join`, a "forgot your password?" link on sign-in, and one
+shared `AuthShell` behind all six out-of-app pages — a page reached from an email that does not look
+like the product is indistinguishable from a phishing page.
+
+`public_app_url` is separate from `frontend_origin` because the origin allowed to call the API and
+the address a link should point at are the same in development and routinely different behind a
+proxy. Conflating them puts `localhost` in real email on the first deploy.
+
+**One bug this surfaced.** `ProtectedRoute` discarded the destination on redirect, so
+`/join?token=…` was destroyed by the very sign-in it required. Fixed — and the destination is
+forwarded across the login↔signup hop too, which is the step an invited *new* user actually takes.
+Found by walking the invitee's path in the browser rather than by reading the code.
+
+**Verified end to end**, against the sandbox instance and a throwaway SMTP server on a real socket
+(the unit tests fake the transport, so nothing until then had shown `smtplib` talking to anything):
+sign up → sign out → *forgot your password?* → message captured off the wire → open its link → set
+a new password → land signed in. Then: create a workspace → invite → UI says "Invitation emailed",
+no code on screen → open the invite link **signed out** → bounce to sign-in → create the account →
+return to `/join` with the token intact → accept → land in the shared library, 2 members. Reusing a
+spent reset token returns 400. 284 backend tests green, 17 of them new; frontend builds; real data
+untouched (190 files, `bda36ac8…`).
+
+**Still not done:** `SMTP_*` has no `.env.example` to be documented in, and nothing retries a failed
+send. Both are deployment work rather than product work.
 
 ---
 

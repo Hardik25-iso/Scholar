@@ -98,11 +98,13 @@ export default function WorkspaceSwitcher({ onSwitch }: Props) {
     if (!email?.trim()) return;
     run(async () => {
       const invitation = await inviteMember(current.id, email.trim());
-      // The token is shown because invitation email is not wired up yet — the
-      // backend says so too. Surfacing it is a stopgap, and labelling it as one
-      // is the difference between a known gap and a mysterious string.
+      // Two genuinely different outcomes, told apart rather than blurred. The
+      // code only appears when the server could not send it — then passing it
+      // on by hand is the only route it has.
       setNotice(
-        `No email is sent yet — send ${invitation.email} this invite code:\n\n${invitation.token}`,
+        invitation.delivered
+          ? `Invitation emailed to ${invitation.email}.`
+          : `No email could be sent — send ${invitation.email} this invite code:\n\n${invitation.token}`,
       );
     });
   };

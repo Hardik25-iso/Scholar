@@ -131,6 +131,37 @@ class PasswordResetToken(SQLModel, table=True):
     used_at: datetime | None = None
 
 
+class RefreshToken(SQLModel, table=True):
+    """One issued refresh token, so a session can be ENDED and not merely expire.
+
+    A JWT alone cannot be revoked — the signature stays valid until `exp`, which
+    is 30 days here. That is the whole reason this row exists: the token's power
+    now comes from a server-side record, so logging out, or detecting a theft,
+    can take it away immediately.
+
+    Rotation: every refresh spends the presented token (`revoked_at`) and issues
+    a fresh one, linked through `replaced_by_id`. That chain is what makes theft
+    DETECTABLE rather than merely possible. A refresh token is used once, so a
+    second use of an already-spent one means two parties hold it — the real
+    owner and someone else. Which one is which is unknowable, so the whole family
+    is revoked and both must log in again. An unnecessary re-login is a much
+    smaller harm than a month of undetected access.
+
+    Only the hash is stored, exactly as for password resets and invitations.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True, foreign_key="user.id")
+    token_hash: str = Field(index=True, unique=True)
+    expires_at: datetime
+    created_at: datetime = Field(default_factory=_utcnow)
+    # Set when the token is spent by a refresh, by a logout, or by the mass
+    # revocation that follows a detected reuse. One column for all three: what
+    # matters at the check is that it is no longer live.
+    revoked_at: datetime | None = None
+    replaced_by_id: int | None = Field(default=None, foreign_key="refreshtoken.id")
+
+
 class AnswerLog(SQLModel, table=True):
     """One answered question, with the complete evidence it was built from.
 

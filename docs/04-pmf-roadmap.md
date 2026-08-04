@@ -440,10 +440,8 @@ Prerequisite for any external user, and for Phase 5 — team data multiplies the
   a large document can exceed a proxy timeout. This genuinely needs a new dependency (`arq`/RQ plus
   Redis, or equivalent) and a deployment decision, so it is not something to slip in unannounced.
   **This is the top remaining item in this phase.**
-- **Refresh-token rotation and revocation.** Refreshing re-issues the cookie so the expiry slides,
-  but the previous refresh token stays valid until it expires — a stolen one cannot be revoked.
-  Real rotation needs server-side token state (a table like `PasswordResetToken`), which is a
-  contained piece of work but was not in scope here.
+- ~~**Refresh-token rotation and revocation.**~~ **Done — see "Sessions that can actually be
+  ended" below.**
 - ~~**Reset-link delivery.**~~ **Done — see "Mail delivery" below.**
 - **`cookie_secure=True` / `SameSite=None`** remain settings, correct for the eventual HTTPS
   deployment and wrong for local development. Flipping them is a deploy-time change, not a code one.
@@ -785,8 +783,62 @@ return to `/join` with the token intact → accept → land in the shared librar
 spent reset token returns 400. 284 backend tests green, 17 of them new; frontend builds; real data
 untouched (190 files, `bda36ac8…`).
 
-**Still not done:** `SMTP_*` has no `.env.example` to be documented in, and nothing retries a failed
-send. Both are deployment work rather than product work.
+**Still not done:** nothing retries a failed send. That is deployment work rather than product work.
+(`.env.example` now exists and documents every setting, including `SMTP_*`.)
+
+---
+
+### Sessions that can actually be ended — refresh-token rotation and revocation
+
+Logging out cleared a cookie. That is all it did. A refresh token captured beforehand kept working
+for its full **30 days**, because a JWT's signature stays valid until `exp` no matter what happens
+afterwards. There was no such thing as ending a session.
+
+`RefreshToken` is the server-side record that takes that power back — stored as a hash, exactly like
+password resets and invitations.
+
+**Rotation.** Every refresh spends the presented token and issues a new one, linked through
+`replaced_by_id`. A refresh token is now a one-use credential rather than a month-long bearer key.
+
+**Reuse detection is what rotation buys.** A *rotated* token presented a second time means two
+parties hold it — the legitimate client and whoever copied it. Nothing can tell which is which, so
+every session for the account is revoked and both must log in again. A forced re-login is a far
+smaller harm than a month of access nobody can see.
+
+**A password reset now ends every other session.** A reset is usually done *because* the account may
+be compromised; burning the reset links while leaving a stolen refresh token live only ever solved
+the smaller half of that problem.
+
+#### Two design problems this ran into
+
+**Logout could not see the refresh cookie.** It is scoped to `/auth/refresh` so a long-lived
+credential travels as rarely as possible, which means it is never sent to `/auth/logout`. Widening
+the path would have made logout easy by weakening the property the scoping exists for. Instead the
+access token carries a `sid` claim naming its refresh record, so logout ends *this* session and no
+other — logging out on a laptop does not sign you out on your phone.
+
+**Reuse detection was too blunt, and only real HTTP showed it.** Logout-revocation and
+rotation-revocation both set `revoked_at`, so treating any revoked token as stolen meant a stale
+background tab retrying its refresh would sign the user out on *every other device* — and handed
+anyone holding one dead token a trivial way to do that on demand. The fix is that only a token with
+a **successor** was genuinely exchanged twice; `replaced_by_id` distinguishes theft from staleness.
+
+The unit tests missed this because each asserted one behaviour in isolation and never replayed a
+logged-out token *before* checking the other device. It surfaced within seconds of driving the two
+scenarios back-to-back against a running server with two cookie jars. Both cases are now tests.
+
+Refresh tokens also gained a random `jti`: `exp` has second resolution, so without one, two
+issuances inside the same second mint a byte-identical string — which would collide on the unique
+index rotation depends on.
+
+**Verified** over real HTTP against the sandbox, in both directions: a stale logged-out token is
+refused while the other device keeps working; a genuinely rotated token replayed kills the whole
+family. `init_db` was rehearsed against a **copy of the real database** — it adds `refreshtoken`
+(and, on that old copy, every post-Phase-4 table) and loses nothing; 6 users and 1 paper intact.
+295 tests green, 11 new; real data untouched.
+
+**Not done:** nothing prunes expired `RefreshToken` rows yet. They are inert once expired, so this
+is table growth, not a correctness or security issue.
 
 ---
 

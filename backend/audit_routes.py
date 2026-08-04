@@ -74,6 +74,8 @@ def get_answer(
     return AnswerLogDetail(
         **_summary(entry, reproducible).model_dump(),
         query=entry.query,
+        retrieval_query=entry.retrieval_query,
+        expansion_mode=entry.expansion_mode,
         answer=entry.answer,
         citations=_citations(entry),
         temperature=entry.temperature,
@@ -112,13 +114,15 @@ def export_answer(
         writer = csv.writer(buffer, lineterminator="\n")
         writer.writerow([
             "answer_id", "asked_at", "question", "answer", "reproducible_now",
+            "retrieval_query", "expansion_mode",
             "source_n", "document", "location", "chunk_index", "faiss_id",
             "char_start", "char_end", "retrieval_score", "rerank_score", "passage",
         ])
         for n, c in enumerate(citations, start=1):
             writer.writerow([
                 entry.id, entry.created_at.isoformat(), entry.question, entry.answer,
-                reproducible, n, c.paper_id, c.locator, c.chunk_index,
+                reproducible, entry.retrieval_query or "", entry.expansion_mode,
+                n, c.paper_id, c.locator, c.chunk_index,
                 c.faiss_id if c.faiss_id is not None else "",
                 c.char_start, c.char_end, f"{c.score:.6f}",
                 "" if c.rerank_score is None else f"{c.rerank_score:.6f}",

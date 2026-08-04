@@ -61,6 +61,8 @@ def record(
     index_dir: str | Path,
     model: str,
     temperature: float,
+    retrieval_query: str | None = None,
+    expansion_mode: str = "none",
 ) -> AnswerLog | None:
     """Persist one answered question. Returns None if logging failed.
 
@@ -79,6 +81,10 @@ def record(
             workspace_id=workspace_id,
             question=request.question,
             query=query,
+            # Only stored when it actually differs: recording a copy of `query`
+            # would imply an expansion happened when none did.
+            retrieval_query=retrieval_query if retrieval_query != query else None,
+            expansion_mode=expansion_mode,
             answer=answer.answer,
             citations_json=json.dumps(_citation_rows(answer.citations), ensure_ascii=False),
             model=model,

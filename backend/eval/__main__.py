@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from backend.chunker import chunk_pages
+from backend.config import settings
 from backend.models import Citation
 
 HERE = Path(__file__).parent
@@ -273,7 +274,8 @@ class Score:
         return self.total / self.best_rr if self.best_rr else 1.0
 
 
-def run(k: int, candidates: int, dense_only: bool = False) -> int:
+def run(k: int, candidates: int, dense_only: bool = False,
+        expansion_mode: str = "none") -> int:
     from backend import lexical
     from backend.reranker import Reranker
     from backend.retriever import Retriever
@@ -320,13 +322,16 @@ def run(k: int, candidates: int, dense_only: bool = False) -> int:
         for q in runnable:
             # Deliberately the SAME function /ask uses. Reimplementing the
             # shortlist here would mean the eval measures a lookalike.
-            cands = shortlist(q.question, store, retriever, k=candidates, dense_only=dense_only)
+            cands, retrieval_query = shortlist(
+                q.question, store, retriever, k=candidates,
+                dense_only=dense_only, expansion_mode=expansion_mode,
+            )
 
             # Only for the per-retriever attribution below, not for scoring.
             dense = retriever.retrieve(q.question, k=candidates)
             sparse = [] if dense_only else lexical.search(q.question, store, k=candidates)
 
-            top = reranker.rerank(q.question, cands, top_k=k)
+            top = reranker.rerank(retrieval_query, cands, top_k=k)
 
             # Each retriever scored on its own too, so the fusion has to justify
             # itself against both rather than only against the previous baseline.
@@ -342,6 +347,7 @@ def run(k: int, candidates: int, dense_only: bool = False) -> int:
                 misses.append(q)
 
     mode = "DENSE ONLY" if dense_only else "HYBRID (dense + lexical, RRF)"
+    mode += f"  [expansion: {expansion_mode}]"
     print("=" * 72)
     print(f"RETRIEVAL — {mode}")
     print(f"k={k}  candidates={candidates}  n={stage2.total} questions over {n_chunks} chunks")
@@ -391,6 +397,10 @@ def main() -> int:
                    help=f"stage-1 shortlist depth (default {DEFAULT_CANDIDATES})")
     p.add_argument("--dense-only", action="store_true",
                    help="disable lexical search and fusion — the pre-hybrid baseline")
+    p.add_argument("--expansion", choices=("none", "prf", "hyde"),
+                   default=settings.query_expansion,
+                   help="query expansion strategy (defaults to the CONFIGURED one, so the "
+                        "eval measures what ships)")
     args = p.parse_args()
 
     if args.build_corpus:
@@ -398,7 +408,8 @@ def main() -> int:
         return 0
     if args.check:
         return check_labels(load_dataset()[0])
-    return run(args.k, args.candidates, dense_only=args.dense_only)
+    return run(args.k, args.candidates, dense_only=args.dense_only,
+               expansion_mode=args.expansion)
 
 
 if __name__ == "__main__":

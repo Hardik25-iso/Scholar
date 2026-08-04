@@ -205,16 +205,22 @@ class InviteRequest(BaseModel):
 class InvitationCreated(BaseModel):
     """A freshly minted invitation.
 
-    `token` is present ONLY because delivery is not wired up yet, and is
-    returned to the inviter alone so they can pass it on by hand. It must be
-    removed the moment a mail provider exists — an invitation token in an API
-    response is a credential in a place credentials do not belong.
+    `token` is returned ONLY when `delivered` is False — i.e. when no mail
+    provider is configured, so handing it to the inviter is the only way it can
+    ever reach the invitee. When mail goes out the token is null, because an
+    invitation token is a credential and a credential in an API response is a
+    place credentials do not belong.
+
+    `delivered` exists so the UI can tell the two apart without guessing from a
+    null: "we emailed them" and "here is a code to send yourself" are different
+    things to say to a user.
     """
     id: int
     email: EmailStr
     role: str
     expires_at: datetime
-    token: str
+    delivered: bool
+    token: str | None = None
 
 
 class MemberPublic(BaseModel):
@@ -238,7 +244,11 @@ class AnswerLogSummary(BaseModel):
 
 class AnswerLogDetail(AnswerLogSummary):
     """A logged answer with its complete evidence chain."""
-    query: str                  # what retrieval ran on (differs for a follow-up)
+    query: str                  # the standalone question, after condensing
+    # What retrieval and reranking ACTUALLY ran on, when expansion changed it.
+    # None means no expansion happened — not that it was withheld.
+    retrieval_query: str | None
+    expansion_mode: str
     answer: str
     citations: list[Citation]
     temperature: float

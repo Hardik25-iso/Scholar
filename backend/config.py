@@ -61,6 +61,23 @@ class Settings(BaseSettings):
     cookie_secure: bool = False
     cookie_samesite: str = "lax"
 
+    # Query-expansion strategy: "none", "prf" or "hyde".
+    #
+    # "hyde" is the default because it was measured best: misses 3 -> 1, hit@5
+    # 94.1% -> 98.0%, and the `vocabulary` class off 0%. It costs one extra LLM
+    # call per question and trades some ranking precision for recall.
+    #
+    # It is only an honest default because AnswerLog.retrieval_query records the
+    # hypothetical it generated. Retrieval is no longer purely deterministic, so
+    # the audit trail has to show what was actually searched — otherwise there is
+    # no way to tell a changed library from a differently-worded hypothetical.
+    # If that column is ever dropped, this must go back to "none".
+    #
+    # "prf" was built, measured and REJECTED: worse everywhere, and it did not
+    # move the class it targeted. Kept selectable so the result stays
+    # reproducible — see docs/04-pmf-roadmap.md.
+    query_expansion: str = "hyde"
+
     # Whether to OCR scanned PDFs at all. OCR is slow and CPU-hungry, so a small
     # instance may reasonably refuse it — and an explicit switch is the only
     # honest way to express "off". Clearing tessdata_prefix does NOT disable it:
@@ -74,6 +91,32 @@ class Settings(BaseSettings):
     # that puts tessdata somewhere non-standard. OCR is optional: with no data
     # directory a scanned PDF is rejected with a clear 422, not a crash.
     tessdata_prefix: str = ""
+
+    # ——— Outbound email ———
+    #
+    # Empty smtp_host means "no mail provider". The app still runs; password
+    # resets and invitations fall back to logging their token and SAY SO rather
+    # than pretending a message went out. See backend/mailer.py.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    # STARTTLS on 587 (the common case) vs implicit TLS on 465. Turn starttls
+    # off only for a relay on localhost — over the internet it sends the SMTP
+    # password in clear text.
+    smtp_starttls: bool = True
+    smtp_ssl: bool = False
+    # A hung mail server must not hold an HTTP worker open indefinitely.
+    smtp_timeout: int = 10
+    # The From address. Required alongside smtp_host — a message with no sender
+    # is rejected by every provider, so treating it as optional would only move
+    # the failure to send time.
+    mail_from: str = ""
+
+    # Where links in email point. Defaults to frontend_origin, which is right in
+    # development and wrong the first time this is deployed behind a real
+    # domain — the CORS origin and the public URL are not always the same thing.
+    public_app_url: str = ""
 
 
 settings = Settings()

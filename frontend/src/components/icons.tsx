@@ -79,3 +79,33 @@ export const ExternalIcon = (p: IconProps) => (
     <path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4" />
   </Base>
 );
+
+/** A shared workspace — two overlapping people. */
+export const UsersIcon = ({ className }: IconProps) => (
+  <Base className={className}>
+    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+    <circle cx="9" cy="7" r="4" />
+    <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+  </Base>
+);
+
+/** Chevron for a dropdown trigger. */
+export const ChevronDownIcon = ({ className }: IconProps) => (
+  <Base className={className}>
+    <path d="m6 9 6 6 6-6" />
+  </Base>
+);
+
+/** Tick for the currently-selected item in a list. */
+export const CheckIcon = ({ className }: IconProps) => (
+  <Base className={className}>
+    <path d="M20 6 9 17l-5-5" />
+  </Base>
+);
+
+/** Add / invite. */
+export const PlusIcon = ({ className }: IconProps) => (
+  <Base className={className}>
+    <path d="M12 5v14M5 12h14" />
+  </Base>
+);

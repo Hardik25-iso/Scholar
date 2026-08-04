@@ -293,3 +293,102 @@ def test_csv_export_is_one_row_per_cited_passage(alice: TestClient, text_pdf: by
 
 def test_export_rejects_an_unknown_format(alice: TestClient):
     assert alice.get("/audit/1/export?format=pdf").status_code == 422
+
+
+# ——— query expansion in the audit trail ———
+
+
+@pytest.mark.slow
+def test_the_expanded_retrieval_query_is_recorded(alice: TestClient, text_pdf: bytes, monkeypatch):
+    """HyDE is only an honest default BECAUSE of this row.
+
+    Retrieval is no longer purely deterministic, so without the hypothetical in
+    the log there is no way to tell a changed library from a differently-worded
+    hypothetical — and the reproducibility claim would quietly stop being true.
+    """
+    from backend.config import settings
+    from backend.models import Answer
+
+    monkeypatch.setattr(settings, "query_expansion", "hyde")
+    monkeypatch.setattr("backend.expansion.hypothetical_answer",
+                        lambda q: "The retriever selects passages by availability.")
+    monkeypatch.setattr("backend.api.generate",
+                        lambda q, c: Answer(question=q, answer="Stubbed [1].", citations=c))
+    monkeypatch.setattr("backend.api.condense_question", lambda q, h: q)
+
+    _upload(alice, text_pdf)
+    _ask(alice)
+
+    logged = alice.get(f"/audit/{alice.get('/audit').json()[0]['id']}").json()
+    assert logged["expansion_mode"] == "hyde"
+    assert logged["retrieval_query"] is not None
+    assert "availability" in logged["retrieval_query"], "the hypothetical was not recorded"
+    assert logged["query"] == QUESTION, "the user's own question must be kept separately"
+
+
+@pytest.mark.slow
+def test_no_retrieval_query_is_recorded_when_nothing_was_expanded(
+    alice: TestClient, text_pdf: bytes, fake_llm, monkeypatch
+):
+    """Storing a copy of `query` would imply an expansion that never happened."""
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "query_expansion", "none")
+    _upload(alice, text_pdf)
+    _ask(alice)
+
+    logged = alice.get(f"/audit/{alice.get('/audit').json()[0]['id']}").json()
+    assert logged["retrieval_query"] is None
+    assert logged["expansion_mode"] == "none"
+
+
+@pytest.mark.slow
+def test_the_csv_export_carries_the_retrieval_query(
+    alice: TestClient, text_pdf: bytes, monkeypatch
+):
+    from backend.config import settings
+    from backend.models import Answer
+
+    monkeypatch.setattr(settings, "query_expansion", "hyde")
+    monkeypatch.setattr("backend.expansion.hypothetical_answer",
+                        lambda q: "Availability is guaranteed at ninety nine percent.")
+    monkeypatch.setattr("backend.api.generate",
+                        lambda q, c: Answer(question=q, answer="Stubbed [1].", citations=c))
+    monkeypatch.setattr("backend.api.condense_question", lambda q, h: q)
+
+    _upload(alice, text_pdf)
+    _ask(alice)
+    entry_id = alice.get("/audit").json()[0]["id"]
+
+    r = alice.get(f"/audit/{entry_id}/export?format=csv")
+    rows = list(csv.DictReader(io.StringIO(r.content.decode("utf-8"))))
+    assert rows[0]["expansion_mode"] == "hyde"
+    assert "Availability" in rows[0]["retrieval_query"]
+
+
+@pytest.mark.slow
+def test_an_unreachable_llm_degrades_expansion_instead_of_failing_the_question(
+    alice: TestClient, text_pdf: bytes, monkeypatch
+):
+    """Expansion improves recall; it is not required for a correct answer, so a
+    retrieval-time optimisation must never be the reason a user gets an error."""
+    import ollama
+
+    from backend.config import settings
+    from backend.models import Answer
+
+    monkeypatch.setattr(settings, "query_expansion", "hyde")
+    monkeypatch.setattr("backend.api.generate",
+                        lambda q, c: Answer(question=q, answer="Stubbed [1].", citations=c))
+    monkeypatch.setattr("backend.api.condense_question", lambda q, h: q)
+
+    _upload(alice, text_pdf)
+
+    def _down(*args, **kwargs):
+        raise ConnectionError("ollama is not running")
+
+    monkeypatch.setattr(ollama, "chat", _down)
+
+    r = _ask(alice)
+    assert r.status_code == 200, "a failed expansion broke the question"
+    assert r.json()["citations"], "retrieval still has to work unexpanded"

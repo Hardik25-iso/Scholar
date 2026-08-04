@@ -127,14 +127,14 @@ def ask(
     session: Session = Depends(get_session),
 ) -> Answer:
     ask_limiter.check(str(user.id))
-    query, citations = _resolve_and_retrieve(workspace.id, request)
+    query, citations, retrieval_query = _resolve_and_retrieve(workspace.id, request)
     answer = generate(query, citations)
-    _record(session, user.id, workspace.id, request, query, answer)
+    _record(session, user.id, workspace.id, request, query, answer, retrieval_query)
     return answer
 
 
-def _record(session: Session, user_id: int, workspace_id: int,
-            request: AskRequest, query: str, answer: Answer) -> None:
+def _record(session: Session, user_id: int, workspace_id: int, request: AskRequest,
+            query: str, answer: Answer, retrieval_query: str | None = None) -> None:
     """Log the served answer with its evidence. Never raises — see audit.record.
 
     Both ids are kept: who asked, and which library they asked. In a shared
@@ -146,10 +146,14 @@ def _record(session: Session, user_id: int, workspace_id: int,
         index_dir=library.workspace_index_dir(workspace_id),
         model=generator.MODEL,
         temperature=generator.TEMPERATURE,
+        retrieval_query=retrieval_query,
+        expansion_mode=settings.query_expansion,
     )
 
 
-def _resolve_and_retrieve(workspace_id: int, request: AskRequest) -> tuple[str, list[Citation]]:
+def _resolve_and_retrieve(
+    workspace_id: int, request: AskRequest
+) -> tuple[str, list[Citation], str]:
     """Condense a follow-up into a standalone query, then run stage 1+2 on it.
 
     Stage 1 is HYBRID: the dense retriever finds passages that mean the right
@@ -172,15 +176,21 @@ def _resolve_and_retrieve(workspace_id: int, request: AskRequest) -> tuple[str, 
     # For a follow-up, rewrite it to stand alone so retrieval doesn't choke on
     # pronouns ("what about it?"). No-op when there's no history.
     query = condense_question(request.question, request.history)
-    candidates = shortlist(
+    candidates, retrieval_query = shortlist(
         query,
         library.workspace_index_dir(workspace_id),
         retriever,
         k=request.candidates,
         papers=request.papers,
+        expansion_mode=settings.query_expansion,
     )
-    citations = _reranker.rerank(query, candidates, top_k=request.k)
-    return query, citations
+    # Reranked with the EXPANDED query, not the original. The measured failure
+    # was the cross-encoder discarding a correct passage that retrieval had
+    # already found, because the question shared no vocabulary with it.
+    # Generation still receives the user's own question — `query` — since the
+    # expansion terms are a retrieval device, not part of what was asked.
+    citations = _reranker.rerank(retrieval_query, candidates, top_k=request.k)
+    return query, citations, retrieval_query
 
 
 # Streaming variant of /ask. Retrieval + reranking run up front, so we can send
@@ -197,7 +207,7 @@ def ask_stream(
     session: Session = Depends(get_session),
 ) -> StreamingResponse:
     ask_limiter.check(str(user.id))
-    query, citations = _resolve_and_retrieve(workspace.id, request)
+    query, citations, retrieval_query = _resolve_and_retrieve(workspace.id, request)
 
     def ndjson():
         yield json.dumps({"type": "citations",
@@ -215,6 +225,7 @@ def ask_stream(
         # reassembled from the deltas rather than regenerated, so the audit
         # record is what the user saw, not a second guess at it.
         _record(session, user.id, workspace.id, request, query,
-                Answer(question=query, answer="".join(parts), citations=citations))
+                Answer(question=query, answer="".join(parts), citations=citations),
+                retrieval_query)
 
     return StreamingResponse(ndjson(), media_type="application/x-ndjson")

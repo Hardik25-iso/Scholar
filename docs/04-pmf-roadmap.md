@@ -440,15 +440,9 @@ Prerequisite for any external user, and for Phase 5 — team data multiplies the
   a large document can exceed a proxy timeout. This genuinely needs a new dependency (`arq`/RQ plus
   Redis, or equivalent) and a deployment decision, so it is not something to slip in unannounced.
   **This is the top remaining item in this phase.**
-- **Refresh-token rotation and revocation.** Refreshing re-issues the cookie so the expiry slides,
-  but the previous refresh token stays valid until it expires — a stolen one cannot be revoked.
-  Real rotation needs server-side token state (a table like `PasswordResetToken`), which is a
-  contained piece of work but was not in scope here.
-- **Reset-link delivery.** `auth.deliver_reset_token` logs the token instead of emailing it,
-  because no mail provider is configured. It is written as a seam — wiring a provider means
-  replacing that function body and nothing else — and it says plainly in its own docstring that
-  password reset must not be exposed to real users until it is replaced. No reset UI was built, on
-  purpose: a form promising an email that never arrives is worse than no form.
+- ~~**Refresh-token rotation and revocation.**~~ **Done — see "Sessions that can actually be
+  ended" below.**
+- ~~**Reset-link delivery.**~~ **Done — see "Mail delivery" below.**
 - **`cookie_secure=True` / `SameSite=None`** remain settings, correct for the eventual HTTPS
   deployment and wrong for local development. Flipping them is a deploy-time change, not a code one.
 
@@ -609,6 +603,102 @@ and the embedder does not bridge the gap either. These were sitting inside the `
 dragging it down and hiding the fact that everything else in it now scores 100%.
 
 **The next retrieval work is query expansion, not an agent.** It addresses the only class at 0%.
+That work was then done — see below.
+
+---
+
+### Query expansion — PRF built and REJECTED, HyDE works but is opt-in
+
+Two strategies were implemented and measured against the same corpus. `--expansion none|prf|hyde`
+makes this reproducible.
+
+| | none | prf | **hyde** |
+|---|---|---|---|
+| **hit@5** | 94.1% | 92.2% | **98.0%** |
+| MRR | **0.822** | 0.771 | 0.805 |
+| hit@1 | **72.5%** | 66.7% | 70.6% |
+| misses | 3 | 4 | **1** |
+| — `vocabulary` (the target) | 0% | **0%** | **50%** |
+| — `comparative` | 80% | 60% | **100%** |
+| — `table` MRR | **0.875** | 0.667 | 0.667 |
+
+#### Why pseudo-relevance feedback failed — and it is not a tuning problem
+
+PRF was the *right-looking* choice: deterministic, no dependency, no LLM call, and aimed squarely at
+vocabulary mismatch. It made every category worse and moved the target class **not at all**.
+
+The diagnosis is structural. PRF mines expansion terms from the top few passages of the first
+retrieval pass, assuming that pass is roughly right and merely needs richer vocabulary. Printing the
+feedback set for the failing questions shows the assumption is false here:
+
+```
+Q: What is the uptime commitment and what happens if it is missed?
+   feedback 1: sample_agreement#4  '8. TERMINATION...'
+   feedback 2: sample_agreement#2  '3. FEES AND PAYMENT...'
+   feedback 3: market_brief_2col#0 'QUARTERLY MARKET BRIEF...'
+   TERMS: ['law', 'next', 'thirty', 'governed', 'governing', 'signed']
+```
+
+The passage that answers the question is not in the feedback set — **because of the vocabulary gap
+PRF was brought in to fix.** The first pass is wrong precisely for the reason expansion was needed,
+so expansion confidently makes it wronger. No amount of tuning depth or term count escapes that
+circularity: PRF can enrich a nearly-right query, and cannot rescue a wrong one.
+
+Kept in the tree at `expansion_mode="prf"` rather than deleted, because "did you try PRF?" is a
+question that will be asked again, and a measured answer beats an absence.
+
+#### Why HyDE works, and what it costs
+
+HyDE asks the LLM what the answer would *look* like and searches for that. It has the outside
+knowledge PRF lacks — that a service level is written as *availability*, that an optimiser is named
+*Adam*:
+
+```
+Q: What optimizer is used to train the model?
+   -> "AdamW was employed for the optimization process."
+```
+
+It cuts misses from 3 to 1, takes `comparative` to 100%, and halves the `vocabulary` failures.
+
+**It is off by default anyway**, for a reason specific to this product rather than a general
+preference: the audit log promises a logged answer can be reproduced against the same index. An LLM
+in the retrieval path makes retrieval non-deterministic, so the central claim quietly weakens.
+Temperature is 0, which makes it *nearly* reproducible, and "nearly" is not what the log says.
+
+The precision cost is also real and should not be waved past: MRR 0.822 → 0.805, hit@1 72.5% →
+70.6%, and `table` MRR 0.875 → 0.667. HyDE trades ranking precision for recall. Recall is the more
+valuable of the two here — a passage the model never sees cannot be used — but it is a trade.
+
+#### HyDE is now the default — with the column that makes it honest
+
+`AnswerLog` gained `retrieval_query` and `expansion_mode`, and `QUERY_EXPANSION` now defaults to
+`hyde`. The column is not bookkeeping; it is the precondition. Retrieval is no longer purely
+deterministic, so without the generated hypothetical in the log there is no way to tell a changed
+library from a differently-worded hypothetical — and `reproducible` would be claiming more than it
+can support. `test_the_default_requires_the_audit_column_that_justifies_it` is the tripwire: if the
+column is ever dropped, that test forces the default back to `none`.
+
+Three things this needed beyond flipping a setting:
+
+1. **A migration.** `backend/migrate.py` adds both columns to existing databases. `retrieval_query`
+   is nullable with no default — an entry written before expansion existed genuinely has no third
+   query, and back-filling one would put a fabricated value in an audit trail. Verified on a
+   database that already had `answerlog` without the columns.
+2. **A fallback.** If the LLM is unreachable, `hypothetical_answer` logs and returns `""`, and
+   retrieval proceeds unexpanded. Expansion improves recall; it is not required for a correct
+   answer, and a retrieval-time optimisation must never be why a user gets an error.
+3. **Three queries, kept separate.** `question` (what was typed) → `query` (standalone, after
+   condensing a follow-up; **this is what generation receives**) → `retrieval_query` (plus the
+   hypothetical; what retrieval and reranking ran on).
+
+**The separation is load-bearing, and it is observable.** Verified end to end on the question that
+scored 0% before: the hypothetical invented *"ninety-nine point nine percent (99.9%) uptime
+guarantee"*, and the answer correctly says **99.5%** — the real figure from the retrieved clause.
+The hypothetical steers retrieval and never reaches the generator, so it cannot contaminate the
+answer. That is the grounding contract doing its job under a change that could easily have broken it.
+
+The eval now defaults to the *configured* strategy rather than to `none`, so `python -m backend.eval`
+measures what actually ships instead of a variant nobody runs.
 
 #### Two mistakes this investigation corrected
 
@@ -626,6 +716,133 @@ dragging it down and hiding the fact that everything else in it now scores 100%.
 Build the agent when a measured class actually fails: comparative dropping below ~70% at a realistic
 `k` on a corpus of thousands of chunks, or a new class (multi-step reasoning over retrieved numbers)
 scoring near zero. The questions are in the eval now, so that check is one command.
+
+---
+
+### Mail delivery — password reset and invitations now reach a human
+
+Two features were complete on the server and unusable in practice. `/auth/forgot` minted a valid
+reset token and wrote it to the log; `/workspaces/{id}/invitations` minted an invite token and
+handed it back to the inviter to pass on by hand. Both worked; neither reached the person it was
+for. A forgotten password was still a permanent lockout.
+
+`backend/mailer.py` is the delivery layer — **stdlib `smtplib` only, no new dependency**. Three
+properties it exists to guarantee:
+
+- **Sending never raises.** `send()` returns a bool. A dead mail server must not 500 `/auth/forgot`,
+  because that route answers a uniform 202 specifically so it cannot be used to test who has an
+  account here — and an error that only appears for *real* addresses would restore the oracle the
+  202 was hiding.
+- **Unconfigured is a state, not an error.** With `smtp_host` empty the app runs exactly as before,
+  logs the token, and says at WARNING level that it did so.
+- **The SMTP password is only sent after STARTTLS.** Asserted by a test that records call ordering
+  against a fake transport, because getting this backwards puts the credential on the wire in clear
+  and nothing about the happy path would look different.
+
+#### The token stopped travelling in the API response
+
+`InvitationCreated.token` used to be unconditional, with a comment saying it must be removed the
+moment a mail provider existed. It now returns `null` whenever `delivered` is true. `delivered` is
+a separate field rather than something to infer from the null: *"we emailed them"* and *"here is a
+code to send them yourself"* are different sentences to put in front of a user, and the UI now says
+whichever one is true.
+
+The two features degrade **differently on a send failure**, on purpose:
+
+| | mail configured, send fails | no mail configured |
+|---|---|---|
+| Password reset | token withheld; user retries | token logged, loudly |
+| Invitation | token returned to the inviter | token returned to the inviter |
+
+An invitation has a safe human fallback — the inviter already knows who they invited. A reset does
+not: falling back to the log would quietly undo the operator's decision that tokens must not appear
+there, and a transient outage is not a licence to do that.
+
+#### The links had to land somewhere
+
+An emailed link into a page that does not exist is worse than no email, so this also built the
+frontend it needs: `/forgot`, `/reset`, `/join`, a "forgot your password?" link on sign-in, and one
+shared `AuthShell` behind all six out-of-app pages — a page reached from an email that does not look
+like the product is indistinguishable from a phishing page.
+
+`public_app_url` is separate from `frontend_origin` because the origin allowed to call the API and
+the address a link should point at are the same in development and routinely different behind a
+proxy. Conflating them puts `localhost` in real email on the first deploy.
+
+**One bug this surfaced.** `ProtectedRoute` discarded the destination on redirect, so
+`/join?token=…` was destroyed by the very sign-in it required. Fixed — and the destination is
+forwarded across the login↔signup hop too, which is the step an invited *new* user actually takes.
+Found by walking the invitee's path in the browser rather than by reading the code.
+
+**Verified end to end**, against the sandbox instance and a throwaway SMTP server on a real socket
+(the unit tests fake the transport, so nothing until then had shown `smtplib` talking to anything):
+sign up → sign out → *forgot your password?* → message captured off the wire → open its link → set
+a new password → land signed in. Then: create a workspace → invite → UI says "Invitation emailed",
+no code on screen → open the invite link **signed out** → bounce to sign-in → create the account →
+return to `/join` with the token intact → accept → land in the shared library, 2 members. Reusing a
+spent reset token returns 400. 284 backend tests green, 17 of them new; frontend builds; real data
+untouched (190 files, `bda36ac8…`).
+
+**Still not done:** nothing retries a failed send. That is deployment work rather than product work.
+(`.env.example` now exists and documents every setting, including `SMTP_*`.)
+
+---
+
+### Sessions that can actually be ended — refresh-token rotation and revocation
+
+Logging out cleared a cookie. That is all it did. A refresh token captured beforehand kept working
+for its full **30 days**, because a JWT's signature stays valid until `exp` no matter what happens
+afterwards. There was no such thing as ending a session.
+
+`RefreshToken` is the server-side record that takes that power back — stored as a hash, exactly like
+password resets and invitations.
+
+**Rotation.** Every refresh spends the presented token and issues a new one, linked through
+`replaced_by_id`. A refresh token is now a one-use credential rather than a month-long bearer key.
+
+**Reuse detection is what rotation buys.** A *rotated* token presented a second time means two
+parties hold it — the legitimate client and whoever copied it. Nothing can tell which is which, so
+every session for the account is revoked and both must log in again. A forced re-login is a far
+smaller harm than a month of access nobody can see.
+
+**A password reset now ends every other session.** A reset is usually done *because* the account may
+be compromised; burning the reset links while leaving a stolen refresh token live only ever solved
+the smaller half of that problem.
+
+#### Two design problems this ran into
+
+**Logout could not see the refresh cookie.** It is scoped to `/auth/refresh` so a long-lived
+credential travels as rarely as possible, which means it is never sent to `/auth/logout`. Widening
+the path would have made logout easy by weakening the property the scoping exists for. Instead the
+access token carries a `sid` claim naming its refresh record, so logout ends *this* session and no
+other — logging out on a laptop does not sign you out on your phone.
+
+**Reuse detection was too blunt, and only real HTTP showed it.** Logout-revocation and
+rotation-revocation both set `revoked_at`, so treating any revoked token as stolen meant a stale
+background tab retrying its refresh would sign the user out on *every other device* — and handed
+anyone holding one dead token a trivial way to do that on demand. The fix is that only a token with
+a **successor** was genuinely exchanged twice; `replaced_by_id` distinguishes theft from staleness.
+
+The unit tests missed this because each asserted one behaviour in isolation and never replayed a
+logged-out token *before* checking the other device. It surfaced within seconds of driving the two
+scenarios back-to-back against a running server with two cookie jars. Both cases are now tests.
+
+Refresh tokens also gained a random `jti`: `exp` has second resolution, so without one, two
+issuances inside the same second mint a byte-identical string — which would collide on the unique
+index rotation depends on.
+
+**Verified** over real HTTP against the sandbox, in both directions: a stale logged-out token is
+refused while the other device keeps working; a genuinely rotated token replayed kills the whole
+family. `init_db` was rehearsed against a **copy of the real database** — it adds `refreshtoken`
+(and, on that old copy, every post-Phase-4 table) and loses nothing; 6 users and 1 paper intact.
+295 tests green, 11 new; real data untouched.
+
+**Pruning.** Every login and every refresh writes a row — roughly 48 a day per active user at a
+30-minute access token, so the table only grows. Expired rows for that user are dropped whenever one
+is issued, which keeps it bounded with no scheduler to deploy and monitor, and keeps the work
+proportional to the account doing it. Revoked-but-unexpired rows are deliberately KEPT: that row
+*is* the reuse-detection signal, and dropping it would turn a replayed stolen token back into a
+plain 401 with nothing noticed.
 
 ---
 

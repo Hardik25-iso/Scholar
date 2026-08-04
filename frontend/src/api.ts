@@ -51,9 +51,13 @@ export interface CreatedInvitation {
   email: string;
   role: "owner" | "member";
   expires_at: string;
-  /** Present only while invitation email delivery is unimplemented — the
-   *  inviter passes it on by hand. Disappears once a mail provider is wired up. */
-  token: string;
+  /** Whether the server actually emailed the invitation. False means no mail
+   *  provider is configured, not that anything failed silently. */
+  delivered: boolean;
+  /** Present ONLY when `delivered` is false — then handing it to the inviter is
+   *  the only way it can reach the invitee. Null once mail is configured: an
+   *  invitation token is a credential, and it should travel one route only. */
+  token: string | null;
 }
 
 export function listWorkspaces(): Promise<Workspace[]> {
@@ -104,7 +108,14 @@ export interface AnswerLogSummary {
 }
 
 export interface AnswerLogDetail extends AnswerLogSummary {
-  query: string; // what retrieval ran on — differs for a condensed follow-up
+  query: string; // the standalone question after condensing; what generation saw
+  /** What retrieval and reranking ACTUALLY ran on, when query expansion changed
+   *  it — the user's question plus an LLM-generated hypothetical answer. null
+   *  means no expansion happened, not that it was withheld. Recorded because
+   *  expansion makes retrieval non-deterministic, and `reproducible` would
+   *  otherwise be claiming more than it can support. */
+  retrieval_query: string | null;
+  expansion_mode: "none" | "prf" | "hyde";
   answer: string;
   citations: Citation[];
   temperature: number;
@@ -347,4 +358,19 @@ export function logout(): Promise<{ status: string }> {
 }
 export function me(): Promise<User> {
   return request<User>("/auth/me");
+}
+/**
+ * Begin a password reset. Always resolves, whether or not the account exists —
+ * the backend answers 202 either way so the endpoint cannot be used to test
+ * whether someone has an account here. The UI must show the same message.
+ */
+export function forgotPassword(email: string): Promise<{ status: string }> {
+  return request("/auth/forgot", { method: "POST", body: JSON.stringify({ email }) });
+}
+/** Consume a reset token and set a new password. Logs the user straight in. */
+export function resetPassword(token: string, password: string): Promise<User> {
+  return request<User>("/auth/reset", {
+    method: "POST",
+    body: JSON.stringify({ token, password }),
+  });
 }

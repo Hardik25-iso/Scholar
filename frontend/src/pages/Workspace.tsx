@@ -59,9 +59,27 @@ export default function Workspace() {
   const latestAnswer = [...exchanges].reverse().find((e) => e.answer)?.answer;
   const hasPapers = papers.length > 0;
 
-  useEffect(() => {
+  const loadPapers = () =>
     listPapers().then(setPapers).catch(() => {}).finally(() => setPapersLoading(false));
+
+  useEffect(() => {
+    loadPapers();
   }, []);
+
+  /**
+   * Switching workspace changes which documents exist, so the conversation has
+   * to go with them. Keeping it would leave answers on screen citing sources
+   * the new library does not contain — the citations would dangle, and the
+   * whole point of this product is that a citation resolves.
+   */
+  const handleSwitchWorkspace = () => {
+    setExchanges([]);
+    setViewer(null);
+    setActiveCitation(null);
+    setLibError(null);
+    setPapersLoading(true);
+    loadPapers();
+  };
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -155,6 +173,7 @@ export default function Workspace() {
           error={libError}
           onUpload={handleUpload}
           onDelete={handleDelete}
+          onSwitchWorkspace={handleSwitchWorkspace}
         />
 
         {/* chat pane */}

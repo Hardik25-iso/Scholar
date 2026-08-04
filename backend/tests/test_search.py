@@ -211,7 +211,7 @@ def test_shortlist_finds_an_exact_reference_dense_search_misses(tmp_path: Path):
     append_to_store(chunks, embed([c.embed_text for c in chunks], progress=False), tmp_path)
     lexical.index_chunks(chunks, tmp_path)
 
-    top = shortlist("What does Section 7.2 say?", tmp_path, Retriever(tmp_path), k=3)
+    top, _ = shortlist("What does Section 7.2 say?", tmp_path, Retriever(tmp_path), k=3)
     assert "Force Majeure" in top[0].text
 
 
@@ -229,10 +229,10 @@ def test_shortlist_can_be_restricted_to_selected_documents(tmp_path: Path):
     lexical.index_chunks(chunks, tmp_path)
 
     retriever = Retriever(tmp_path)
-    both = shortlist("What does clause 7.2 say?", tmp_path, retriever, k=5)
+    both, _ = shortlist("What does clause 7.2 say?", tmp_path, retriever, k=5)
     assert {c.paper_id for c in both} == {"contract_a", "contract_b"}
 
-    scoped = shortlist("What does clause 7.2 say?", tmp_path, retriever, k=5, papers=["contract_b"])
+    scoped, _ = shortlist("What does clause 7.2 say?", tmp_path, retriever, k=5, papers=["contract_b"])
     assert {c.paper_id for c in scoped} == {"contract_b"}
 
 
@@ -257,7 +257,7 @@ def test_a_lexically_found_passage_still_carries_its_audit_trail(tmp_path: Path)
     retriever = Retriever(tmp_path)
     assert lexical.search("7.2", tmp_path, k=5)[0].faiss_id is None, "premise: lexical has none"
 
-    top = shortlist("What does 7.2 say?", tmp_path, retriever, k=5)[0]
+    top = shortlist("What does 7.2 say?", tmp_path, retriever, k=5)[0][0]
     assert top.faiss_id == 0
     assert (top.char_start, top.char_end) == (100, 159)
     assert top.locator == "section 1"
@@ -276,7 +276,7 @@ def test_dense_only_shortlist_reproduces_the_pre_hybrid_path(tmp_path: Path):
     lexical.index_chunks(chunks, tmp_path)
 
     retriever = Retriever(tmp_path)
-    dense_only = shortlist("retrieval", tmp_path, retriever, k=4, dense_only=True)
+    dense_only, _ = shortlist("retrieval", tmp_path, retriever, k=4, dense_only=True)
     assert [c.chunk_index for c in dense_only] == [
         c.chunk_index for c in retriever.retrieve("retrieval", k=4)
     ]

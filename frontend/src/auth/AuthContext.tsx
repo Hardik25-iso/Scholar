@@ -8,6 +8,10 @@ interface AuthState {
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  /** Adopt a session established by some other route. `/auth/reset` sets the
+   *  auth cookies itself, so the context must be told rather than asked to log
+   *  in again with a password the user has only just chosen. */
+  adopt: (user: User) => void;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -33,7 +37,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, register, logout, adopt: setUser }}>
       {children}
     </AuthContext.Provider>
   );

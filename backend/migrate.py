@@ -57,7 +57,14 @@ def add_missing_columns(dry_run: bool) -> list[str]:
     """
     wanted = {
         "paper": [("workspace_id", "INTEGER NOT NULL DEFAULT 0")],
-        "answerlog": [("workspace_id", "INTEGER NOT NULL DEFAULT 0")],
+        "answerlog": [
+            ("workspace_id", "INTEGER NOT NULL DEFAULT 0"),
+            # Nullable with no default: an entry written before query expansion
+            # existed genuinely has no third query, and inventing one would put
+            # a fabricated value in an audit trail.
+            ("retrieval_query", "TEXT"),
+            ("expansion_mode", "VARCHAR NOT NULL DEFAULT 'none'"),
+        ],
         "user": [("current_workspace_id", "INTEGER")],
     }
     actions: list[str] = []

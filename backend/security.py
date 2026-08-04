@@ -8,6 +8,7 @@ so two different long passwords could hash equal. We reject >72 bytes at the API
 model boundary (see models.py); the assert here is a defense-in-depth backstop.
 """
 import hashlib
+import secrets
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -37,24 +38,46 @@ ACCESS = "access"
 REFRESH = "refresh"
 
 
-def _create_token(subject: str, kind: str, expires: timedelta) -> str:
+def _create_token(
+    subject: str, kind: str, expires: timedelta,
+    unique: bool = False, session_id: int | None = None,
+) -> str:
     payload = {"sub": subject, "typ": kind, "exp": datetime.now(timezone.utc) + expires}
+    if unique:
+        payload["jti"] = secrets.token_urlsafe(12)
+    if session_id is not None:
+        payload["sid"] = str(session_id)
     return jwt.encode(payload, settings.secret_key, algorithm=ALGORITHM)
 
 
-def create_access_token(subject: str) -> str:
-    """Mint a short-lived JWT whose `sub` is the user id."""
+def create_access_token(subject: str, session_id: int | None = None) -> str:
+    """Mint a short-lived JWT whose `sub` is the user id.
+
+    `sid` names the refresh-token record this access token belongs to. It exists
+    so logout can end THIS session and no other: the refresh cookie is scoped to
+    /auth/refresh and so is never sent to /auth/logout, and widening that scope
+    to make logout convenient would mean a long-lived credential travelling on
+    requests that have no use for it.
+    """
     return _create_token(subject, ACCESS,
-                         timedelta(minutes=settings.access_token_expire_minutes))
+                         timedelta(minutes=settings.access_token_expire_minutes),
+                         session_id=session_id)
 
 
 def create_refresh_token(subject: str) -> str:
-    """Mint a long-lived token whose only power is obtaining access tokens."""
+    """Mint a long-lived token whose only power is obtaining access tokens.
+
+    Carries a random `jti` so every issuance is a DISTINCT string. Without it,
+    `exp` has second resolution and two refreshes inside the same second mint
+    byte-identical tokens — which would collide on the unique index that makes
+    rotation and reuse detection possible, and silently make the new token
+    indistinguishable from the one it replaced.
+    """
     return _create_token(subject, REFRESH,
-                         timedelta(days=settings.refresh_token_expire_days))
+                         timedelta(days=settings.refresh_token_expire_days), unique=True)
 
 
-def _decode(token: str, expected: str) -> str | None:
+def _decode(token: str, expected: str) -> dict | None:
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
     except jwt.PyJWTError:  # expired, bad signature, malformed — all invalid
@@ -64,21 +87,35 @@ def _decode(token: str, expected: str) -> str | None:
     # which is the safe direction to fail.
     if payload.get("typ") != expected:
         return None
-    return payload.get("sub")
+    return payload
 
 
 def decode_access_token(token: str) -> str | None:
     """Return the subject of a valid, unexpired ACCESS token, else None."""
-    return _decode(token, ACCESS)
+    payload = _decode(token, ACCESS)
+    return payload.get("sub") if payload else None
+
+
+def access_session_id(token: str) -> int | None:
+    """The refresh-token record this access token belongs to, if it names one.
+
+    None for tokens minted before `sid` existed. Those sessions can still be
+    logged out of the browser; the server-side record simply outlives them until
+    it expires, which is the pre-existing behaviour and not a new gap.
+    """
+    payload = _decode(token, ACCESS)
+    sid = payload.get("sid") if payload else None
+    return int(sid) if sid is not None else None
 
 
 def decode_refresh_token(token: str) -> str | None:
     """Return the subject of a valid, unexpired REFRESH token, else None."""
-    return _decode(token, REFRESH)
+    payload = _decode(token, REFRESH)
+    return payload.get("sub") if payload else None
 
 
 def hash_token(token: str) -> str:
-    """Fingerprint for a token we store server-side (password resets).
+    """Fingerprint for a token we store server-side (password resets, refresh).
 
     Stored hashed for the same reason passwords are: a leaked database must not
     hand over working reset links. SHA-256 rather than bcrypt because the input

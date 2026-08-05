@@ -166,6 +166,29 @@ class PaperPublic(BaseModel):
     created_at: datetime
 
 
+class IndexJobPublic(BaseModel):
+    """An upload's progress. What POST /papers returns now.
+
+    The upload no longer answers "here is your indexed document" — it cannot,
+    because indexing has not happened yet. It answers "here is the thing to
+    watch", and `status` carries the outcome that used to be an HTTP code:
+    a corrupt file or an un-OCR-able scan is `failed` with the same message the
+    422 used to carry, not a silent absence from the library.
+    """
+    id: int
+    paper_id: str
+    filename: str
+    title: str
+    status: str            # queued | running | done | failed
+    error: str | None      # set when status is failed
+    n_chunks: int
+    # True when no queue was reachable and the work ran in the request after
+    # all. Surfaced rather than hidden: it means the deployment is missing its
+    # worker, and the proxy-timeout risk this feature removes is still present.
+    ran_inline: bool
+    created_at: datetime
+
+
 # ——— Workspace boundary models ———
 
 class WorkspacePublic(BaseModel):

@@ -2,3 +2,4 @@
 # install a test runner. Everything the suite needs beyond this (httpx, for
 # starlette's TestClient) already ships as a FastAPI dependency.
 pytest>=8.0,<10.0
+fakeredis>=2.20,<3.0

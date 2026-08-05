@@ -131,6 +131,52 @@ class PasswordResetToken(SQLModel, table=True):
     used_at: datetime | None = None
 
 
+# Indexing job states. `failed` is a first-class outcome, not an exception that
+# vanished: once indexing leaves the request there is no HTTP status left to
+# carry the bad news, so the row has to.
+JOB_QUEUED = "queued"
+JOB_RUNNING = "running"
+JOB_DONE = "done"
+JOB_FAILED = "failed"
+
+
+class IndexJob(SQLModel, table=True):
+    """One document waiting to be, or being, indexed.
+
+    Indexing used to run inside the upload request: parse, OCR, embed, write.
+    A large document therefore raced the proxy timeout, and the user's only
+    feedback was a spinner that either finished or died with no explanation.
+
+    This row is what replaces the HTTP response. It exists BEFORE the work
+    starts, so a job that is queued, running, crashed, or lost to a worker
+    restart is all visible — the alternative is an upload that silently never
+    appears in the library with nothing anywhere saying why.
+
+    `ran_inline` records that no queue was reachable and the work happened in
+    the request after all. That is a real difference in behaviour (the request
+    blocked, the timeout risk came back) and the log should not pretend
+    otherwise.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    workspace_id: int = Field(index=True, foreign_key="workspace.id")
+    user_id: int = Field(index=True, foreign_key="user.id")  # who uploaded it
+
+    paper_id: str          # the slug reserved for it; the stored file is named this
+    filename: str          # what the user called it
+    title: str
+    suffix: str
+
+    status: str = Field(default=JOB_QUEUED, index=True)
+    error: str | None = None       # user-facing reason, when status is failed
+    n_chunks: int = 0
+    ran_inline: bool = Field(default=False)
+
+    created_at: datetime = Field(default_factory=_utcnow, index=True)
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
 class RefreshToken(SQLModel, table=True):
     """One issued refresh token, so a session can be ENDED and not merely expire.
 

@@ -111,7 +111,9 @@ def test_asking_past_the_limit_returns_429(alice: TestClient, monkeypatch):
 def test_uploading_past_the_limit_returns_429(alice: TestClient, monkeypatch):
     monkeypatch.setattr(upload_limiter, "limit", 1)
     files = {"file": ("a.pdf", b"not a pdf", "application/pdf")}
-    assert alice.post("/papers", headers=csrf(alice), files=files).status_code == 422
+    # 202: the upload is accepted and the indexing job then fails on content.
+    # The budget is charged for the upload, not for the outcome.
+    assert alice.post("/papers", headers=csrf(alice), files=files).status_code == 202
     assert alice.post("/papers", headers=csrf(alice), files=files).status_code == 429
 
 

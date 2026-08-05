@@ -92,6 +92,19 @@ class Settings(BaseSettings):
     # directory a scanned PDF is rejected with a clear 422, not a crash.
     tessdata_prefix: str = ""
 
+    # ——— Indexing queue ———
+    #
+    # Where the arq worker and the API meet. Empty means "no queue": uploads are
+    # indexed inside the request, which is the old behaviour and races the proxy
+    # timeout on a large document. Correct for local development, wrong for a
+    # deployment — and either way the IndexJob row records which one happened,
+    # so a slow upload is never a mystery.
+    #
+    # Setting this is only half the job: the worker is a SECOND process,
+    #   arq backend.jobs.WorkerSettings
+    # and a deploy that starts only the API accepts uploads it will never index.
+    redis_url: str = ""
+
     # ——— Outbound email ———
     #
     # Empty smtp_host means "no mail provider". The app still runs; password

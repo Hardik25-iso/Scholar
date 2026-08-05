@@ -903,15 +903,43 @@ correct per-document answer with citations; simple queries show no added latency
 
 ---
 
-### Phase 7 — Launch *(1 week)*
+### Phase 7 — Launch — **DONE, except the parts that need a lawyer**
 
-- **Honest copy.** `frontend/src/pages/Landing.tsx` line 82 ("Runs a local model — your papers
-  never leave your machine") and line 112 ("Generation runs locally — nothing is sent to a
-  third-party model") become **false** the moment generation moves to the managed API. Rewrite to
-  what will be true. This is a correctness fix, not marketing.
-- **Data-handling posture** — a plain statement of what leaves the customer's environment; ToS,
-  privacy policy, account deletion, data export.
-- Decide whether a self-hosted generation option belongs on the enterprise roadmap.
+**The honest-copy problem was worse than this plan said.** The plan assumed
+*"your papers never leave your machine"* becomes false only when generation moves to a managed API.
+It is false **the moment this is hosted at all** — it is a self-hosting claim printed on a page where
+strangers sign up, and on a hosted instance the documents plainly do leave the visitor's machine.
+They arrive on the server. Rewritten to the thing that is true either way: answers are generated on
+this server, and no third-party AI provider sees the documents.
+
+**Account deletion and export, built and tested** (`backend/account.py`):
+
+- **Export** is a `.tar.gz` containing the real files, the workspaces, and every answer with its
+  full evidence chain. An export that names your documents without containing them is not an export.
+  It excludes documents *other people* uploaded into shared workspaces — shared access is not
+  ownership, and "export my data" must not mean "take a copy of my colleague's contract".
+- **Deletion** removes rows *and bytes*: files come off disk before the rows that record where they
+  are, because the other order loses the paths and leaves the data. Tested by checking the disk, not
+  the database — "the row is gone" and "the bytes are gone" are different claims and only the second
+  is what a privacy policy promises.
+- **The dangerous case is a shared workspace.** Deletion is refused while the account is the last
+  owner of one that other people are still in, and the error says how to escape it. Those documents
+  belong to the workspace; destroying a team's library as a side effect of someone closing their
+  account would be the wrong default, and orphaning it silently would be worse.
+- The password is required again. Deletion is irreversible and reachable from a logged-in session,
+  so a borrowed laptop should not be enough.
+
+**`/privacy` and `/terms`** are written from the code rather than from a template — every claim
+corresponds to something in this repo, and both carry a visible note saying they describe what the
+software does and are **not** a lawyer-reviewed policy for a public service.
+
+**Verified through the real UI**: the landing page no longer claims the documents stay on your
+machine; the export downloads a genuine gzip archive; deleting refuses a wrong password, then erases
+the account so that both `/auth/me` and a fresh login return 401. 323 tests green.
+
+**Left, and genuinely not code:** the operating entity, a contact address, governing law and
+jurisdiction, sub-processors, and a lawful basis if EU/UK users are served. Those need Hardik's
+details and a lawyer, not a commit.
 
 ---
 

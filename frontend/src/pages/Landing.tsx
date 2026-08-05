@@ -78,8 +78,17 @@ export default function Landing() {
               {user ? "go to your library" : "sign in"}
             </Link>
           </div>
+          {/* This line used to read "your papers never leave your machine",
+              which is a SELF-HOSTING claim printed on a page where strangers
+              sign up. On a hosted instance the documents plainly do leave the
+              visitor's machine — they arrive here. What stays true either way
+              is that no third-party model sees them, so that is what it says. */}
           <p className="mt-6 font-mono text-[0.62rem] text-faint">
-            Runs a local model — your papers never leave your machine.
+            Answers are generated on this server — your documents are never sent
+            to a third-party AI provider.{" "}
+            <Link to="/privacy" className="underline underline-offset-2 hover:text-accent">
+              How your data is handled
+            </Link>
           </p>
         </div>
 
@@ -108,8 +117,8 @@ export default function Landing() {
               body="Every claim carries a [n] marker linking to the exact source passage and page. Click it, read it, trust it."
             />
             <Feature
-              title="Your library, private"
-              body="Sign in, upload your own PDFs, and ask across them. Generation runs locally — nothing is sent to a third-party model."
+              title="Your library, yours"
+              body="Your documents are readable only by you and the workspaces you share them with. Retrieval and generation both run on this server — nothing is sent to a third-party AI provider, and nothing is used to train a model."
             />
           </div>
         </div>

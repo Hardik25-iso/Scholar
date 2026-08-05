@@ -280,3 +280,9 @@ class AnswerLogDetail(AnswerLogSummary):
     papers_filter: list[str] | None
     index_fingerprint: str
     n_chunks_indexed: int
+
+
+class DeleteAccountRequest(BaseModel):
+    """Deleting is irreversible and reachable from a logged-in session, so the
+    password is asked for again — a borrowed laptop should not be enough."""
+    password: str

@@ -18,12 +18,13 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Response, status
 from sqlmodel import Session, select
 
-from backend import mailer
+from backend import account, mailer
 from backend.config import settings
 from backend.db import get_session
 from backend.db_models import PasswordResetToken, RefreshToken, User
 from backend.models import (
-    ForgotPasswordRequest, LoginRequest, RegisterRequest, ResetPasswordRequest, UserPublic,
+    DeleteAccountRequest, ForgotPasswordRequest, LoginRequest, RegisterRequest,
+    ResetPasswordRequest, UserPublic,
 )
 from backend.security import (
     access_session_id, create_access_token, create_refresh_token, decode_access_token,
@@ -449,3 +450,58 @@ def reset_password(
 
     _set_auth_cookies(response, user.id, session)  # log them straight in
     return user
+
+
+# ——— account lifecycle: export and deletion ———
+
+
+@router.get("/export")
+def export_account(
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> Response:
+    """Download everything this account holds, as a .tar.gz.
+
+    Includes the actual document files, not a list of them — an export that
+    names your documents without containing them is not an export.
+    """
+    blob = account.build_export(session, user)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+    return Response(
+        content=blob,
+        media_type="application/gzip",
+        headers={"Content-Disposition": f'attachment; filename="scholar-export-{stamp}.tar.gz"'},
+    )
+
+
+@router.post("/delete", dependencies=[Depends(require_csrf)])
+def delete_account(
+    body: DeleteAccountRequest,
+    response: Response,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> dict[str, str]:
+    """Erase this account and everything that belongs only to it.
+
+    The password is required again. Deletion is irreversible and reachable from
+    a logged-in session, so a borrowed laptop or a stolen access token should
+    not be enough — this is the one action worth asking twice for.
+
+    Refuses while the account is the last owner of a shared workspace that other
+    people are still in. Their documents are not this account's to destroy, and
+    silently orphaning them would be worse than saying so.
+    """
+    if not verify_password(body.password, user.hashed_password):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "password is incorrect")
+
+    try:
+        account.delete_account(session, user)
+    except account.DeletionBlocked as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"you are the last owner of a shared workspace ({exc}). Make someone "
+            f"else an owner, or remove the other members, then delete your account.",
+        ) from exc
+
+    _clear_auth_cookies(response)
+    return {"status": "account deleted"}

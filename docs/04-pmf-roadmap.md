@@ -397,7 +397,11 @@ through a real server.
 
 ---
 
-### Phase 4 — Durable and operable *(2 weeks)* — **MOSTLY DONE**
+### Phase 4 — Durable and operable *(2 weeks)* — **DONE**
+
+*(Was "mostly" until the job queue, refresh-token revocation and mail delivery landed. The
+only item left in its list is `cookie_secure` / `SameSite=None`, which is a deploy-time
+setting rather than code — correct for HTTPS, wrong for local development.)*
 
 Prerequisite for any external user, and for Phase 5 — team data multiplies the cost of data loss.
 

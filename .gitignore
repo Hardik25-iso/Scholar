@@ -30,3 +30,10 @@ backend/api.py.tmp.*
 # OS / editor
 .DS_Store
 Thumbs.db
+
+# Backup archives. These contain the REAL database and uploaded documents —
+# account emails, password hashes, and people's files. `backend.backup create`
+# writes here by default, so an un-ignored backups/ is one `git add -A` away
+# from publishing a customer's contracts to a public repo.
+backups/
+*.tar.gz

@@ -3,9 +3,9 @@ import {
   askStream, deletePaper, getIndexJob, listIndexJobs, listPapers, uploadPaper,
   type Answer, type Citation, type IndexJob, type Paper,
 } from "../api";
-import { useAuth } from "../auth/AuthContext";
 import AnswerView from "../components/AnswerView";
-import { AskIcon, LayersIcon, LogoutIcon } from "../components/icons";
+import { AskIcon, LayersIcon } from "../components/icons";
+import AccountMenu from "../components/AccountMenu";
 import Library from "../components/Library";
 import PdfViewer, { type ViewerTarget } from "../components/PdfViewer";
 import QueryBar from "../components/QueryBar";
@@ -33,8 +33,6 @@ const SUGGESTIONS = [
 ];
 
 export default function Workspace() {
-  const { user, logout } = useAuth();
-
   // ——— library state ———
   const [papers, setPapers] = useState<Paper[]>([]);
   const [papersLoading, setPapersLoading] = useState(true);
@@ -195,16 +193,7 @@ export default function Workspace() {
             grounded answers from your papers
           </span>
         </div>
-        <div className="flex items-center gap-4">
-          <span className="hidden font-mono text-[0.66rem] text-graphite sm:inline">{user?.email}</span>
-          <button
-            onClick={() => logout()}
-            className="inline-flex cursor-pointer items-center gap-[0.35rem] font-mono text-[0.62rem]
-                       uppercase tracking-[0.12em] text-graphite transition-colors duration-200 hover:text-accent"
-          >
-            <LogoutIcon className="h-[0.85rem] w-[0.85rem]" /> log out
-          </button>
-        </div>
+        <AccountMenu />
       </header>
 
       {/* ——— three-pane workspace: library · chat · sources ——— */}

@@ -5,6 +5,8 @@ import AuthForm from "./pages/AuthForm";
 import ForgotPassword from "./pages/ForgotPassword";
 import JoinWorkspace from "./pages/JoinWorkspace";
 import Landing from "./pages/Landing";
+import Privacy from "./pages/Privacy";
+import Terms from "./pages/Terms";
 import ResetPassword from "./pages/ResetPassword";
 import Workspace from "./pages/Workspace";
 
@@ -20,6 +22,10 @@ export default function App() {
     <Routes>
       {/* Public landing page — the front door, accessible signed in or out. */}
       <Route path="/" element={<Landing />} />
+      {/* Public, and reachable signed out: someone deciding whether to sign up
+          is exactly who needs to read them. */}
+      <Route path="/privacy" element={<Privacy />} />
+      <Route path="/terms" element={<Terms />} />
       <Route path="/login" element={<PublicOnly><AuthForm mode="login" /></PublicOnly>} />
       <Route path="/signup" element={<PublicOnly><AuthForm mode="signup" /></PublicOnly>} />
 

@@ -38,6 +38,7 @@ and checked — or shown to be no longer reproducible, and told so plainly.
 | **Proves itself** | Every answer is written to an audit log with its full evidence chain, model, parameters and an index fingerprint — and is exportable as JSON/CSV. |
 | **Works for teams** | Workspaces with membership, roles and email invitations. A non-member gets a 404, not a 403. |
 | **Refuses honestly** | When the corpus does not contain the answer, it says so instead of inventing one. |
+| **Yours to take back** | Export everything — documents, answers, evidence — as a `.tar.gz`. Delete the account and the files come off disk, not just out of the database. |
 
 ---
 
@@ -261,6 +262,14 @@ refresh token is treated as theft and revokes every session for that account.
 
 See [`.env.example`](.env.example) for every setting.
 
+### Before you serve strangers
+
+`/privacy` and `/terms` ship with the app and are written from the code — but they describe *what the
+software does*, and are **not a lawyer-reviewed policy**. Running this as a public or paid service
+also needs your operating entity, a contact address, governing law and jurisdiction, your
+sub-processors, and a lawful basis if you serve users in the EU or UK. Both pages carry a visible
+note saying exactly this.
+
 ---
 
 ## Known limits
@@ -273,6 +282,7 @@ See [`.env.example`](.env.example) for every setting.
   server's missing capability rather than blaming the file.
 - **Cross-document comparison is the weakest class** — 80% at k=5 without expansion. It is measured,
   not ignored.
+- **The legal pages are a starting point, not advice** — see "Before you serve strangers" above.
 - The AI assists; it never replaces reading the source. That is what the citations are for.
 
 ---

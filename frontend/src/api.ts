@@ -389,6 +389,15 @@ export function logout(): Promise<{ status: string }> {
 export function me(): Promise<User> {
   return request<User>("/auth/me");
 }
+/** Download everything this account holds. A plain link, so the browser handles
+ *  the download; the auth cookie is same-site and travels with it. */
+export function accountExportUrl(): string {
+  return `${API_BASE}/auth/export`;
+}
+/** Irreversible. The password is required again by the server. */
+export function deleteAccount(password: string): Promise<{ status: string }> {
+  return request("/auth/delete", { method: "POST", body: JSON.stringify({ password }) });
+}
 /**
  * Begin a password reset. Always resolves, whether or not the account exists —
  * the backend answers 202 either way so the endpoint cannot be used to test

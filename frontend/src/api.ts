@@ -327,12 +327,42 @@ export function paperFileUrl(id: number): string {
 export function deletePaper(id: number): Promise<void> {
   return request<void>(`/papers/${id}`, { method: "DELETE" });
 }
+/** An upload in progress. Indexing happens off the request, so this — not a
+ *  Paper — is what an upload returns. */
+export interface IndexJob {
+  id: number;
+  paper_id: string;
+  filename: string;
+  title: string;
+  status: "queued" | "running" | "done" | "failed";
+  /** Set when status is "failed": the reason the upload could not be indexed. */
+  error: string | null;
+  n_chunks: number;
+  /** True when no queue was reachable and the work ran inside the request. */
+  ran_inline: boolean;
+  created_at: string;
+}
+
+export function getIndexJob(id: number): Promise<IndexJob> {
+  return request<IndexJob>(`/papers/jobs/${id}`);
+}
+
+/** Uploads still being indexed in this workspace — lets a reloaded page resume. */
+export function listIndexJobs(): Promise<IndexJob[]> {
+  return request<IndexJob[]>("/papers/jobs");
+}
+
 /**
- * Upload a PDF. Uses FormData (multipart) rather than the JSON `request`
+ * Upload a document. Uses FormData (multipart) rather than the JSON `request`
  * helper, so we must NOT set Content-Type — the browser sets it with the
  * multipart boundary. Still sends the auth cookie + the CSRF header.
+ *
+ * Returns a JOB, not a Paper: indexing runs outside the request so a large
+ * document cannot exceed the proxy timeout. Poll `getIndexJob` until its status
+ * is terminal — and note the job may ALREADY be terminal here, when the server
+ * has no queue and indexed inline.
  */
-export async function uploadPaper(file: File): Promise<Paper> {
+export async function uploadPaper(file: File): Promise<IndexJob> {
   const form = new FormData();
   form.append("file", file);
   const csrf = readCookie("csrf_token");

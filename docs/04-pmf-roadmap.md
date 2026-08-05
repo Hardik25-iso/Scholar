@@ -436,10 +436,7 @@ Prerequisite for any external user, and for Phase 5 — team data multiplies the
 
 #### Not done, and why
 
-- **Job queue for indexing.** `papers.py` still indexes synchronously inside the upload request, so
-  a large document can exceed a proxy timeout. This genuinely needs a new dependency (`arq`/RQ plus
-  Redis, or equivalent) and a deployment decision, so it is not something to slip in unannounced.
-  **This is the top remaining item in this phase.**
+- ~~**Job queue for indexing.**~~ **Done — see "Indexing leaves the request" below.**
 - ~~**Refresh-token rotation and revocation.**~~ **Done — see "Sessions that can actually be
   ended" below.**
 - ~~**Reset-link delivery.**~~ **Done — see "Mail delivery" below.**
@@ -843,6 +840,52 @@ is issued, which keeps it bounded with no scheduler to deploy and monitor, and k
 proportional to the account doing it. Revoked-but-unexpired rows are deliberately KEPT: that row
 *is* the reuse-detection signal, and dropping it would turn a replayed stolen token back into a
 plain 401 with nothing noticed.
+
+---
+
+### Indexing leaves the request — the queue, and what it cost
+
+`papers.py` parsed, OCR'd and embedded inside the upload request, so a large document raced the
+proxy timeout and the user's only feedback was a spinner that either finished or died.
+
+`arq` + Redis, as planned — the one approved new dependency. Two processes now, not one:
+
+```
+uvicorn backend.api:app            # the API
+arq backend.jobs.WorkerSettings    # the indexer
+```
+
+**The honest cost: `POST /papers` can no longer answer "here is your indexed document".** It returns
+**202 with an `IndexJob`**, and the outcome that used to be an HTTP status — a corrupt file, an
+un-OCR-able scan — is now `status: "failed"` with the identical message on the job. That invalidated
+**10 existing tests**. None were bugs; every one asserted the old contract, and each was rewritten to
+assert the same behaviour through the job. This was stopped and reported before the tests were
+touched, because "the change broke the tests so I changed the tests" is exactly the move that hides a
+real regression.
+
+Three decisions worth recording:
+
+- **One implementation, two callers.** `indexing.run_index_job` is what the arq worker runs *and*
+  what the API runs when no queue is reachable. A fallback that behaves differently from the real
+  path is worse than none, because it is only ever exercised when something is already wrong.
+- **No queue means inline, and the job says so.** `ran_inline` is on the row and surfaced in the API.
+  A deploy that starts the API without the worker would otherwise accept uploads and index none of
+  them, and look identical to one that worked.
+- **The `Paper` row is written only on success.** A row created at upload time would put a document
+  in the library that retrieval cannot find.
+
+`run_index_job` refuses to re-run a terminal job: arq retries on worker crash, and a second run would
+index the same document into the same store — after which every answer would cite it twice. Tested.
+
+**Verified through the real UI** against the sandbox: a document uploaded, the card showing its
+state, the paper appearing with its chunk count, and a corrupt upload surfacing
+*"could not read this file"* in the library pane — the failure path that no longer has an HTTP status
+to travel on. Then a question answered from it with citations. 310 tests green; real data untouched.
+
+**Still not done:** the queued path is tested with the transport faked, not against a live Redis —
+no Redis was available on this machine (no binary, Docker daemon stopped, no passwordless sudo).
+`enqueue_index_job` is verified to fall back rather than raise when Redis is unreachable, which is
+the failure mode that matters most, but a real end-to-end worker run is outstanding.
 
 ---
 

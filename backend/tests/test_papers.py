@@ -19,6 +19,31 @@ def _upload(client: TestClient, name: str, data: bytes, content_type: str = PDF_
     )
 
 
+def _index(client: TestClient, name: str, data: bytes, content_type: str = PDF_TYPE) -> dict:
+    """Upload and return the FINISHED job.
+
+    Uploading is now asynchronous: the route answers 202 with a job, and the
+    outcome that used to be an HTTP status is `status` on that job. No Redis
+    runs in the test environment, so indexing happens inline and the job is
+    already terminal when the response arrives — the queued path is exercised
+    separately in test_jobs.py.
+    """
+    r = _upload(client, name, data, content_type)
+    assert r.status_code == 202, r.text
+    return r.json()
+
+
+def _paper_id(client: TestClient, title: str) -> int:
+    """The database id of an indexed paper, looked up by title.
+
+    Not taken from the upload response any more: that returns a JOB, whose id is
+    its own. The two happen to collide at 1 in a fresh database, which is
+    exactly the kind of coincidence that hides a bug until it doesn't.
+    """
+    papers = client.get("/papers").json()
+    return next(p["id"] for p in papers if p["title"] == title)
+
+
 # ——— validation, rejected before any expensive work ———
 
 
@@ -30,10 +55,12 @@ def test_unsupported_type_rejected(alice: TestClient, name):
 def test_gate_is_the_extension_not_the_client_content_type(alice: TestClient):
     """content_type is client-chosen and varies by OS for the office formats, so
     the extension is what must decide — it is also what selects the extractor."""
-    # Right extension, nonsense content type -> gets past the gate (fails later on content).
-    r = _upload(alice, "report.docx", b"not really a docx", "application/octet-stream")
-    assert r.status_code == 422, r.text
-    # Wrong extension, PDF content type -> still refused.
+    # Right extension, nonsense content type -> gets past the gate, then fails on
+    # content when it is actually read.
+    assert _index(alice, "report.docx", b"not really a docx",
+                  "application/octet-stream")["status"] == "failed"
+    # Wrong extension, PDF content type -> still refused, and still up front:
+    # the type gate is cheap and stays in the request.
     assert _upload(alice, "photo.png", b"%PDF-1.4", PDF_TYPE).status_code == 415
 
 
@@ -53,11 +80,17 @@ def test_upload_requires_csrf(alice: TestClient):
 # ——— the orphan-file bug ———
 
 
-def test_corrupt_pdf_returns_422_not_500(alice: TestClient):
+def test_corrupt_pdf_fails_the_job_and_never_the_server(alice: TestClient):
     """A file that claims to be a PDF but isn't. PyMuPDF raises FileDataError;
-    before the fix that escaped as a 500."""
-    r = _upload(alice, "fake.pdf", b"not a real pdf at all")
-    assert r.status_code == 422, r.text
+    it escaped as a 500 once, and the fix must survive indexing moving off the
+    request — where there is no longer an HTTP status to carry the bad news.
+
+    The upload itself succeeds (the file arrived); the JOB is what fails, with
+    the same message the 422 used to carry.
+    """
+    job = _index(alice, "fake.pdf", b"not a real pdf at all")
+    assert job["status"] == "failed"
+    assert job["error"] == "could not read this file (corrupt or not a valid document)"
 
 
 def test_corrupt_pdf_leaves_no_orphan_on_disk(alice: TestClient):
@@ -83,12 +116,11 @@ def test_failed_upload_does_not_create_an_index(alice: TestClient):
 
 @pytest.mark.slow
 def test_real_pdf_indexes(alice: TestClient, text_pdf: bytes):
-    r = _upload(alice, "paper.pdf", text_pdf)
-    assert r.status_code == 201, r.text
-    body = r.json()
-    assert body["n_chunks"] > 0
-    assert body["filename"] == "paper.pdf"
-    assert body["title"] == "paper"
+    job = _index(alice, "paper.pdf", text_pdf)
+    assert job["status"] == "done", job
+    assert job["n_chunks"] > 0
+    assert job["filename"] == "paper.pdf"
+    assert job["title"] == "paper"
 
 
 @pytest.mark.slow
@@ -100,9 +132,9 @@ def test_real_pdf_indexes(alice: TestClient, text_pdf: bytes):
 def test_office_formats_index_end_to_end(alice: TestClient, request, filename, fixture):
     """The Phase 1 headline: these were a 415 before — the product could not open
     the documents its target user actually has."""
-    r = _upload(alice, filename, request.getfixturevalue(fixture))
-    assert r.status_code == 201, r.text
-    assert r.json()["n_chunks"] > 0
+    job = _index(alice, filename, request.getfixturevalue(fixture))
+    assert job["status"] == "done", job
+    assert job["n_chunks"] > 0
 
 
 @pytest.mark.slow
@@ -113,9 +145,9 @@ def test_a_scanned_pdf_indexes_and_is_retrievable(alice: TestClient, scanned_pdf
     from backend.store import load
 
     ws = workspace_id(alice)
-    r = _upload(alice, "signed.pdf", scanned_pdf)
-    assert r.status_code == 201, r.text
-    assert r.json()["n_chunks"] > 0
+    job = _index(alice, "signed.pdf", scanned_pdf)
+    assert job["status"] == "done", job
+    assert job["n_chunks"] > 0
 
     _, chunks = load(library.workspace_index_dir(ws))
     text = " ".join(" ".join(c.text.split()) for c in chunks)
@@ -136,18 +168,18 @@ def test_scanned_pdf_without_ocr_explains_the_server_cannot_do_it(
     from backend.config import settings
 
     monkeypatch.setattr(settings, "ocr_enabled", False)
-    r = _upload(alice, "signed.pdf", scanned_pdf)
-    assert r.status_code == 422, r.text
-    assert "OCR is not available on this server" in r.json()["detail"]
+    job = _index(alice, "signed.pdf", scanned_pdf)
+    assert job["status"] == "failed", job
+    assert "OCR is not available on this server" in job["error"]
 
 
 @pytest.mark.slow
 def test_markdown_indexes_end_to_end(alice: TestClient):
     body = ("Retrieval-augmented generation pairs a parametric model with a "
             "non-parametric memory. ") * 12
-    r = _upload(alice, "notes.md", f"# Notes\n\n{body}".encode(), "text/markdown")
-    assert r.status_code == 201, r.text
-    assert r.json()["n_chunks"] > 0
+    job = _index(alice, "notes.md", f"# Notes\n\n{body}".encode(), "text/markdown")
+    assert job["status"] == "done", job
+    assert job["n_chunks"] > 0
 
 
 @pytest.mark.slow
@@ -162,7 +194,8 @@ def test_uploaded_file_keeps_its_own_extension_on_disk(alice: TestClient, xlsx_b
 @pytest.mark.slow
 def test_office_file_is_served_back_as_a_download(alice: TestClient, xlsx_bytes: bytes):
     """No browser renders a workbook inline — offering it as one would be a lie."""
-    paper_id = _upload(alice, "fees.xlsx", xlsx_bytes).json()["id"]
+    _index(alice, "fees.xlsx", xlsx_bytes)
+    paper_id = _paper_id(alice, "fees")
     r = alice.get(f"/papers/{paper_id}/file")
     assert r.status_code == 200
     assert r.headers["content-type"].startswith(
@@ -175,7 +208,8 @@ def test_office_file_is_served_back_as_a_download(alice: TestClient, xlsx_bytes:
 @pytest.mark.slow
 def test_deleting_a_non_pdf_removes_its_file(alice: TestClient, xlsx_bytes: bytes):
     ws = workspace_id(alice)
-    paper_id = _upload(alice, "fees.xlsx", xlsx_bytes).json()["id"]
+    _index(alice, "fees.xlsx", xlsx_bytes)
+    paper_id = _paper_id(alice, "fees")
     assert alice.delete(f"/papers/{paper_id}", headers=csrf(alice)).status_code == 204
     assert list(library.workspace_papers_dir(ws).glob("*")) == []
 
@@ -211,7 +245,8 @@ def test_duplicate_filename_gets_a_distinct_paper_id(alice: TestClient, text_pdf
 
 @pytest.mark.slow
 def test_paper_file_is_served_back(alice: TestClient, text_pdf: bytes):
-    paper_id = _upload(alice, "paper.pdf", text_pdf).json()["id"]
+    _index(alice, "paper.pdf", text_pdf)
+    paper_id = _paper_id(alice, "paper")
     r = alice.get(f"/papers/{paper_id}/file")
     assert r.status_code == 200
     assert r.headers["content-type"] == PDF_TYPE
@@ -231,14 +266,16 @@ def test_a_second_user_sees_an_empty_library(alice: TestClient, other_client: Te
 @pytest.mark.slow
 def test_cross_user_file_read_is_404_not_403(alice: TestClient, other_client: TestClient, text_pdf: bytes):
     """404 rather than 403 — a 403 would confirm the paper exists."""
-    paper_id = _upload(alice, "paper.pdf", text_pdf).json()["id"]
+    _index(alice, "paper.pdf", text_pdf)
+    paper_id = _paper_id(alice, "paper")
     other_client.post("/auth/register", json={"email": "mallory@example.com", "password": "validpassword123"})
     assert other_client.get(f"/papers/{paper_id}/file").status_code == 404
 
 
 @pytest.mark.slow
 def test_cross_user_delete_is_404(alice: TestClient, other_client: TestClient, text_pdf: bytes):
-    paper_id = _upload(alice, "paper.pdf", text_pdf).json()["id"]
+    _index(alice, "paper.pdf", text_pdf)
+    paper_id = _paper_id(alice, "paper")
     other_client.post("/auth/register", json={"email": "mallory@example.com", "password": "validpassword123"})
     r = other_client.delete(f"/papers/{paper_id}", headers=csrf(other_client))
     assert r.status_code == 404
@@ -250,14 +287,16 @@ def test_cross_user_delete_is_404(alice: TestClient, other_client: TestClient, t
 
 @pytest.mark.slow
 def test_delete_requires_csrf(alice: TestClient, text_pdf: bytes):
-    paper_id = _upload(alice, "paper.pdf", text_pdf).json()["id"]
+    _index(alice, "paper.pdf", text_pdf)
+    paper_id = _paper_id(alice, "paper")
     assert alice.delete(f"/papers/{paper_id}").status_code == 403
 
 
 @pytest.mark.slow
 def test_delete_removes_the_row_the_file_and_the_index(alice: TestClient, text_pdf: bytes):
     ws = workspace_id(alice)
-    paper_id = _upload(alice, "paper.pdf", text_pdf).json()["id"]
+    _index(alice, "paper.pdf", text_pdf)
+    paper_id = _paper_id(alice, "paper")
 
     assert alice.delete(f"/papers/{paper_id}", headers=csrf(alice)).status_code == 204
     assert alice.get("/papers").json() == []

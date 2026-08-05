@@ -1,17 +1,27 @@
 import { useRef } from "react";
-import type { Paper } from "../api";
+import type { IndexJob, Paper } from "../api";
 import { FileIcon, TrashIcon, UploadIcon } from "./icons";
 import WorkspaceSwitcher from "./WorkspaceSwitcher";
 
 interface Props {
   papers: Paper[];
-  loading: boolean;      // initial library fetch
-  uploading: boolean;    // an upload is in flight
+  loading: boolean;          // initial library fetch
+  job: IndexJob | null;      // the upload being indexed, if any
   error: string | null;
   onUpload: (file: File) => void;
   onDelete: (id: number) => void;
   onSwitchWorkspace: () => void;
 }
+
+// What each job state means to someone watching. "queued" is a real state now —
+// the work may be waiting on a worker — and saying "indexing" during it would
+// claim progress that has not started.
+const JOB_LABEL: Record<IndexJob["status"], string> = {
+  queued: "waiting to index…",
+  running: "indexing…",
+  done: "done",
+  failed: "failed",
+};
 
 /**
  * Left rail: the documents the current WORKSPACE holds. Every answer is
@@ -20,8 +30,9 @@ interface Props {
  * important piece of context on the screen.
  */
 export default function Library({
-  papers, loading, uploading, error, onUpload, onDelete, onSwitchWorkspace,
+  papers, loading, job, error, onUpload, onDelete, onSwitchWorkspace,
 }: Props) {
+  const busy = job !== null;
   const fileRef = useRef<HTMLInputElement>(null);
 
   const pick = () => fileRef.current?.click();
@@ -60,7 +71,7 @@ export default function Library({
       />
       <button
         onClick={pick}
-        disabled={uploading}
+        disabled={busy}
         className="group mx-4 mt-[0.9rem] cursor-pointer rounded-[10px] border-[1.5px] border-dashed
                    border-line bg-panel px-4 py-5 text-center text-graphite transition-all duration-200
                    hover:border-accent/50 hover:bg-[#FDF6F4] hover:text-accentInk hover:shadow-e1
@@ -76,15 +87,24 @@ export default function Library({
 
       {/* paper cards */}
       <div className="flex min-h-0 flex-1 flex-col gap-[0.55rem] px-[0.8rem] pb-4 pt-3">
-        {uploading && (
+        {job && (
           <div className="flex gap-[0.7rem] rounded-[10px] border border-lineSoft bg-raised p-[0.7rem] px-3 shadow-e1">
             <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[7px] bg-accentSoft text-accent">
               <FileIcon className="h-[1.05rem] w-[1.05rem]" />
             </span>
             <div className="min-w-0 flex-1">
-              <p className="font-mono text-[0.7rem] text-accent">indexing…</p>
+              <p className="truncate font-serif text-[0.9rem] leading-tight text-ink" title={job.filename}>
+                {job.title.replace(/_/g, " ")}
+              </p>
+              <p className="mt-[0.15rem] font-mono text-[0.7rem] text-accent">
+                {JOB_LABEL[job.status]}
+              </p>
               <div className="mt-[0.4rem] h-[3px] overflow-hidden rounded-sm bg-line">
-                <span className="block h-full w-3/5 animate-pulse rounded-sm bg-gradient-to-r from-accent to-[#C7614F]" />
+                {/* Indeterminate on purpose: the server reports a state, not a
+                    percentage, and a bar that invents progress is a lie that
+                    gets slower the bigger the document is. */}
+                <span className={`block h-full rounded-sm bg-gradient-to-r from-accent to-[#C7614F]
+                                  ${job.status === "queued" ? "w-1/5 opacity-60" : "w-3/5 animate-pulse"}`} />
               </div>
             </div>
           </div>
@@ -92,7 +112,7 @@ export default function Library({
 
         {loading ? (
           <p className="px-3 py-3 font-mono text-[0.62rem] text-faint">loading…</p>
-        ) : papers.length === 0 && !uploading ? (
+        ) : papers.length === 0 && !busy ? (
           <p className="px-3 py-3 font-mono text-[0.62rem] leading-relaxed text-faint">
             No documents yet. Upload one to start asking grounded questions.
           </p>

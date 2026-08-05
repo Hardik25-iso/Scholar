@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { askStream, deletePaper, listPapers, uploadPaper, type Answer, type Citation, type Paper } from "../api";
+import {
+  askStream, deletePaper, getIndexJob, listIndexJobs, listPapers, uploadPaper,
+  type Answer, type Citation, type IndexJob, type Paper,
+} from "../api";
 import { useAuth } from "../auth/AuthContext";
 import AnswerView from "../components/AnswerView";
 import { AskIcon, LayersIcon, LogoutIcon } from "../components/icons";
@@ -7,6 +10,10 @@ import Library from "../components/Library";
 import PdfViewer, { type ViewerTarget } from "../components/PdfViewer";
 import QueryBar from "../components/QueryBar";
 import SourcePanel from "../components/SourcePanel";
+
+// How often to ask the server how an upload is getting on. Indexing takes
+// seconds to minutes, so a tighter loop would just add requests.
+const POLL_MS = 1200;
 
 // Warm radial wash behind the whole workspace — lifts it off a flat fill.
 const PAGE_BG = "radial-gradient(120% 80% at 50% -10%, #FBFAF6 0%, #F7F5F0 55%)";
@@ -31,7 +38,10 @@ export default function Workspace() {
   // ——— library state ———
   const [papers, setPapers] = useState<Paper[]>([]);
   const [papersLoading, setPapersLoading] = useState(true);
-  const [uploading, setUploading] = useState(false);
+  // The indexing job being followed, if any. Replaces a bare `uploading` flag:
+  // "queued" and "running" are different things to show, and a failure needs
+  // the reason, not just the absence of success.
+  const [job, setJob] = useState<IndexJob | null>(null);
   const [libError, setLibError] = useState<string | null>(null);
 
   // ——— chat state ———
@@ -62,8 +72,19 @@ export default function Workspace() {
   const loadPapers = () =>
     listPapers().then(setPapers).catch(() => {}).finally(() => setPapersLoading(false));
 
+  /** Pick an unfinished upload back up after a reload.
+   *
+   *  Indexing outlives the page now, so closing the tab mid-upload would
+   *  otherwise leave a document that appears minutes later with no explanation
+   *  of where it came from. Only the newest is followed — the UI shows one. */
+  const resumePendingJob = () =>
+    listIndexJobs()
+      .then((pending) => { if (pending.length) follow(pending[0]); })
+      .catch(() => {});
+
   useEffect(() => {
     loadPapers();
+    resumePendingJob();
   }, []);
 
   /**
@@ -78,23 +99,45 @@ export default function Workspace() {
     setActiveCitation(null);
     setLibError(null);
     setPapersLoading(true);
+    setJob(null);          // that job belongs to the workspace we just left
     loadPapers();
+    resumePendingJob();
   };
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [exchanges]);
 
+  /**
+   * Upload, then follow the indexing job to its end.
+   *
+   * The upload no longer returns a finished document — indexing runs off the
+   * request so a large file cannot hit the proxy timeout. So the outcome that
+   * used to be an HTTP error arrives as `status: "failed"` on the job, and is
+   * shown in the same place a rejected upload always was.
+   */
+  const follow = async (start: IndexJob) => {
+    let current = start;
+    setJob(current);
+    // The job can already be terminal when the server has no queue and indexed
+    // inline, so this polls only while there is something to wait for.
+    while (current.status === "queued" || current.status === "running") {
+      await new Promise((r) => setTimeout(r, POLL_MS));
+      current = await getIndexJob(current.id);
+      setJob(current);
+    }
+    if (current.status === "failed") setLibError(current.error ?? "indexing failed");
+    else await loadPapers();
+    setJob(null);
+  };
+
   const handleUpload = async (file: File) => {
     setLibError(null);
-    setUploading(true);
     try {
-      const paper = await uploadPaper(file);
-      setPapers((ps) => [paper, ...ps]);
+      await follow(await uploadPaper(file));
     } catch (err) {
       setLibError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setUploading(false);
+      setJob(null);
     }
   };
 
@@ -169,7 +212,7 @@ export default function Workspace() {
         <Library
           papers={papers}
           loading={papersLoading}
-          uploading={uploading}
+          job={job}
           error={libError}
           onUpload={handleUpload}
           onDelete={handleDelete}

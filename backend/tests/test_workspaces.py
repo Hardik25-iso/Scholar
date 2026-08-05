@@ -36,6 +36,18 @@ def _upload(client: TestClient, data: bytes, name: str = "paper.pdf"):
                        files={"file": (name, data, "application/pdf")})
 
 
+def _uploaded_paper_id(client: TestClient, data: bytes, name: str) -> int:
+    """Upload, then look the PAPER's id up from the library.
+
+    Upload answers with a job now, whose id is its own — reading `id` off that
+    response gives the wrong number as soon as the two sequences diverge.
+    """
+    r = _upload(client, data, name=name)
+    assert r.status_code == 202, r.text
+    papers = client.get("/papers").json()
+    return next(p["id"] for p in papers if p["filename"] == name)
+
+
 # ——— every account gets a personal workspace ———
 
 
@@ -322,7 +334,7 @@ def test_deletion_is_narrower_than_reading(
     able to silently destroy a colleague's work — there is no undo."""
     created = _create_workspace(alice)
     alice.post(f"/workspaces/{created['id']}/activate", headers=csrf(alice))
-    paper_id = _upload(alice, text_pdf, name="alices_contract.pdf").json()["id"]
+    paper_id = _uploaded_paper_id(alice, text_pdf, "alices_contract.pdf")
 
     other = _register(other_client, OTHER["email"])
     token = _invite(alice, created["id"], OTHER["email"])["token"]
@@ -347,7 +359,7 @@ def test_an_owner_can_delete_any_document_in_the_workspace(
     token = _invite(alice, created["id"], OTHER["email"])["token"]
     other.post("/workspaces/accept", json={"token": token}, headers=csrf(other))
     other.post(f"/workspaces/{created['id']}/activate", headers=csrf(other))
-    paper_id = _upload(other, text_pdf, name="members_upload.pdf").json()["id"]
+    paper_id = _uploaded_paper_id(other, text_pdf, "members_upload.pdf")
 
     alice.post(f"/workspaces/{created['id']}/activate", headers=csrf(alice))
     assert alice.delete(f"/papers/{paper_id}", headers=csrf(alice)).status_code == 204

@@ -17,9 +17,12 @@ from sqlmodel import Session, select
 from backend import library
 from backend.auth import get_current_user, require_csrf
 from backend.db import get_session
-from backend.db_models import ROLE_OWNER, Paper, User, Workspace
-from backend.models import PaperPublic
-from backend import parser
+from backend.db_models import (
+    JOB_QUEUED, JOB_RUNNING, ROLE_OWNER, IndexJob, Paper, User, Workspace,
+)
+from backend.indexing import run_index_job
+from backend.jobs import enqueue_index_job
+from backend.models import IndexJobPublic, PaperPublic
 from backend.parser import SUPPORTED_EXTENSIONS
 from backend.ratelimit import upload_limiter
 from backend.workspaces import get_current_workspace, require_membership
@@ -60,14 +63,55 @@ def _unique_paper_id(session: Session, workspace_id: int, stem: str) -> str:
     return f"{base}-{n}"
 
 
-@router.post("", response_model=PaperPublic, status_code=status.HTTP_201_CREATED,
+@router.get("/jobs/{job_id}", response_model=IndexJobPublic)
+def get_index_job(
+    job_id: int,
+    workspace: Workspace = Depends(get_current_workspace),
+    session: Session = Depends(get_session),
+) -> IndexJob:
+    """How an upload is getting on.
+
+    Declared before the /{paper_id} routes. Nothing collides today — their
+    shapes differ — but FastAPI matches in declaration order, so adding a plain
+    `GET /papers/{paper_id}` later would shadow `/papers/jobs` if these came
+    after it. Cheap to get right now, confusing to debug then.
+
+    Scoped to the workspace like everything else: a job id must not be a way to
+    learn what another workspace is uploading.
+    """
+    job = session.get(IndexJob, job_id)
+    if job is None or job.workspace_id != workspace.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
+    return job
+
+
+@router.get("/jobs", response_model=list[IndexJobPublic])
+def list_index_jobs(
+    workspace: Workspace = Depends(get_current_workspace),
+    session: Session = Depends(get_session),
+) -> list[IndexJob]:
+    """Unfinished uploads in this workspace.
+
+    Exists so a reloaded page can pick work back up. Without it, closing the tab
+    loses track of an upload that is still indexing, and the document appears
+    later with no explanation of where it came from.
+    """
+    return session.exec(
+        select(IndexJob)
+        .where(IndexJob.workspace_id == workspace.id,
+               IndexJob.status.in_([JOB_QUEUED, JOB_RUNNING]))
+        .order_by(IndexJob.created_at.desc())
+    ).all()
+
+
+@router.post("", response_model=IndexJobPublic, status_code=status.HTTP_202_ACCEPTED,
              dependencies=[Depends(require_csrf)])
 async def upload_paper(
     file: UploadFile,
     user: User = Depends(get_current_user),
     workspace: Workspace = Depends(get_current_workspace),
     session: Session = Depends(get_session),
-) -> Paper:
+) -> IndexJob:
     # Indexing is the second-most expensive thing this app does (parse, OCR,
     # embed). Charged before reading the body, so a rate-limited caller does not
     # get to make the server buffer 20 MB first.
@@ -93,44 +137,35 @@ async def upload_paper(
     stem = Path(name).stem
     paper_id = _unique_paper_id(session, workspace.id, stem)
 
-    # Persist the file, then index it. Indexing has two failure modes and BOTH
-    # must roll the saved file back, or the upload leaves an orphan on disk with
-    # no matching DB row:
-    #   - it raises (corrupt/unreadable file — PyMuPDF raises FileDataError),
-    #   - it succeeds but yields nothing (a scan we could not OCR, or an empty file).
+    # The file is stored before the job is queued, because the job refers to it
+    # by path. A stored file with no job would be an orphan, so the two are
+    # written in the order that makes the job the thing that owns cleanup.
     papers_dir = library.workspace_papers_dir(workspace.id)
     papers_dir.mkdir(parents=True, exist_ok=True)
     doc_path = papers_dir / f"{paper_id}{suffix}"
     doc_path.write_bytes(data)
 
-    try:
-        n_chunks = library.index_document(workspace.id, doc_path, paper_id)
-    except Exception as exc:
-        # index_document writes to the FAISS store only as its last step, so a
-        # failure here leaves the user's index untouched — only the file needs undoing.
-        doc_path.unlink(missing_ok=True)
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "could not read this file (corrupt or not a valid document)",
-        ) from exc
-
-    if n_chunks == 0:
-        doc_path.unlink(missing_ok=True)
-        detail = "no extractable text found"
-        if suffix == ".pdf" and not parser.ocr_available():
-            # Be specific rather than blaming the file: a scanned PDF is a
-            # server capability gap here, not a bad upload.
-            detail += " — this looks like a scanned PDF, and OCR is not available on this server"
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail)
-
-    paper = Paper(
-        workspace_id=workspace.id, user_id=user.id,  # user_id = who uploaded it
-        paper_id=paper_id, title=stem, filename=name, n_chunks=n_chunks,
+    job = IndexJob(
+        workspace_id=workspace.id, user_id=user.id,
+        paper_id=paper_id, filename=name, title=stem, suffix=suffix,
     )
-    session.add(paper)
+    session.add(job)
     session.commit()
-    session.refresh(paper)
-    return paper
+    session.refresh(job)
+
+    # Indexing (parse, OCR, embed) is what used to race the proxy timeout, so it
+    # leaves the request here. If no queue is reachable we do it inline anyway
+    # rather than accepting an upload nothing will ever process — and the job
+    # records that it happened that way, because the timeout risk came back with
+    # it and a silent difference in behaviour is the kind that bites at 2am.
+    if not await enqueue_index_job(job.id):
+        job.ran_inline = True
+        session.add(job)
+        session.commit()
+        run_index_job(job.id)
+        session.refresh(job)
+
+    return job
 
 
 @router.get("", response_model=list[PaperPublic])

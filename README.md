@@ -17,6 +17,14 @@ cited to the exact page and character span it came from.
 Every answer is logged with the evidence that produced it, so it can be pulled back up months later
 and checked — or shown to be no longer reproducible, and told so plainly.
 
+**▶ Try it: [scholar-production-480b.up.railway.app](https://scholar-production-480b.up.railway.app)**
+— create an account, drop in a PDF, ask it something. Answers stream in a few seconds with citations
+you can click through to the page they came from.
+
+> The live instance runs generation on a hosted model; the same code runs entirely on your machine
+> with a local one (see [Quickstart](#quickstart)). Uploads on the demo are real — don't put anything
+> confidential in it.
+
 > Built as a study of retrieval-augmented generation done properly: not "wire an LLM to a vector
 > store", but the parts that decide whether anyone can trust the output — layout-aware parsing, hybrid
 > retrieval, reranking, span-level citation, and an audit trail. Every retrieval change in this repo
@@ -54,7 +62,8 @@ and checked — or shown to be no longer reproducible, and told so plainly.
 
 ## Quickstart
 
-Requires Python 3.11+, Node 18+, and [Ollama](https://ollama.com) for generation.
+Requires Python 3.11+ and Node 18+. Generation needs either [Ollama](https://ollama.com) locally or a
+free hosted endpoint — both are shown below, and retrieval and the eval harness need neither.
 
 ```bash
 git clone https://github.com/Hardik25-iso/Scholar.git && cd Scholar
@@ -69,8 +78,7 @@ Set `SECRET_KEY` in `.env` — it is the one value with no default, on purpose:
 python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
-Pull the generation model (Gemma 3 4B — set in `backend/generator.py`), then start the API and the
-frontend:
+Pull the generation model, then start the API and the frontend:
 
 ```bash
 ollama pull gemma3:4b
@@ -85,6 +93,19 @@ cd frontend && npm install && npm run dev
 ```
 
 Open http://localhost:5173, create an account, drop in a document, and ask it something.
+
+**Prefer not to install Ollama?** Point generation at any OpenAI-compatible endpoint instead — Groq,
+Google's Gemini/Gemma API and OpenRouter all speak that protocol and all have free tiers:
+
+```bash
+LLM_PROVIDER=hosted
+LLM_BASE_URL=https://api.groq.com/openai/v1
+LLM_MODEL=llama-3.3-70b-versatile
+LLM_API_KEY=<your key>
+```
+
+Nothing else changes: retrieval, reranking, citations and the grounding contract are identical either
+way — the model is a config choice, not a code path (`backend/llm.py`).
 
 **Optional — the indexing worker.** Without it, uploads are indexed inside the request, which is fine
 locally and races the proxy timeout on a large document in production. With `REDIS_URL` set, run:

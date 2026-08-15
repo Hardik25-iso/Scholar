@@ -121,3 +121,38 @@ def test_provider_failures_surface_as_one_error_type():
         wrapped = provider._wrap(raised.__new__(raised))
         assert isinstance(wrapped, llm.LLMUnavailable)
         assert expected in str(wrapped)
+
+
+def test_pasted_values_are_stripped_of_whitespace(monkeypatch):
+    """A trailing newline on a pasted key must not reach the HTTP client.
+
+    This is not cosmetic. httpx rejects a header value containing a newline
+    (header injection), so the request is never sent — and the OpenAI SDK
+    surfaces that as a *connection* error, which reads as "the provider is
+    unreachable" and sends you debugging a network fault that does not exist.
+    A real deploy failed exactly this way.
+    """
+    import httpx
+
+    from backend.config import Settings
+
+    s = Settings(
+        secret_key="  test-secret\n",
+        llm_provider="hosted\n",
+        llm_base_url=" https://api.groq.com/openai/v1\n",
+        llm_api_key="gsk_pasted_with_a_newline\n",
+        llm_model="llama-3.3-70b-versatile\n",
+    )
+    assert s.llm_api_key == "gsk_pasted_with_a_newline"
+    assert s.llm_base_url == "https://api.groq.com/openai/v1"
+    assert s.llm_provider == "hosted"
+    assert s.secret_key == "test-secret"
+
+    # The property that actually matters. A newline survives Headers() and
+    # Request() construction without complaint and only fails at send time
+    # (httpx: LocalProtocolError "Illegal header value"), which the OpenAI SDK
+    # re-raises as APIConnectionError. So there is nothing to catch earlier —
+    # keeping the value clean is the whole defence.
+    assert "\n" not in s.llm_api_key
+    assert "\r" not in s.llm_api_key
+    httpx.Headers({"Authorization": f"Bearer {s.llm_api_key}"})

@@ -8,6 +8,7 @@ of failing at startup — including the legacy ANTHROPIC_API_KEY from an earlier
 experiment, which Scholar does not read. (It should still be rotated: it was
 exposed in this project's history. Nothing here depends on it.)
 """
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -180,6 +181,20 @@ class Settings(BaseSettings):
     # development and wrong the first time this is deployed behind a real
     # domain — the CORS origin and the public URL are not always the same thing.
     public_app_url: str = ""
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _strip_whitespace(cls, v: object) -> object:
+        """Trim surrounding whitespace from every string setting.
+
+        Pasting a value into a hosting dashboard is how most of these are set,
+        and a trailing newline is invisible there. It is not harmless: a key
+        with a trailing "\\n" makes an HTTP header value illegal, so the client
+        refuses to send the request at all — and reports it as a *connection*
+        error, which sends you hunting for a network fault that does not exist.
+        Cost us a deploy; costs one line to prevent.
+        """
+        return v.strip() if isinstance(v, str) else v
 
 
 settings = Settings()

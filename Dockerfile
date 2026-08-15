@@ -105,6 +105,12 @@ EXPOSE 8001
 # embedder and the LLM, so an unhealthy container is one that genuinely cannot
 # answer a question — not merely one whose process is alive.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8001/health || exit 1
+    CMD curl -fsS "http://127.0.0.1:${PORT:-8001}/health" || exit 1
 
-CMD ["uvicorn", "backend.api:app", "--host", "0.0.0.0", "--port", "8001"]
+# Shell form, not exec form, so ${PORT} is expanded at runtime.
+#
+# Railway (and Cloud Run, and Heroku) assign a port and route traffic to it,
+# so a hardcoded port means the platform's router never reaches the container
+# and the deploy fails health checks while the app is in fact running fine.
+# Falls back to 8001 so `docker run -p 8001:8001` still works unchanged.
+CMD uvicorn backend.api:app --host 0.0.0.0 --port ${PORT:-8001}

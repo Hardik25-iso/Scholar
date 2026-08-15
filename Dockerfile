@@ -87,7 +87,15 @@ COPY --from=frontend /app/frontend/dist ./frontend/dist
 # user's papers. DATA_ROOT and DATABASE_URL point at /data instead.
 ENV DATA_ROOT=/data/workspaces \
     DATABASE_URL=sqlite:////data/scholar.db
-VOLUME /data
+
+# NO `VOLUME /data` HERE, DELIBERATELY. Railway rejects the VOLUME instruction
+# outright ("use Railway Volumes") and the build fails before it starts. The
+# instruction was never load-bearing: it only declares a default mount point.
+# Attaching storage is the operator's job either way —
+#   Railway/Fly/Render: attach a volume at /data in the platform's UI
+#   plain Docker:       docker run -v scholar-data:/data ...
+# and the directory itself is created and chowned below, so an unmounted run
+# still works (writing into the container layer, which is lost on restart).
 
 # Run as a non-root user. Anything that escapes the app should not own the box.
 #

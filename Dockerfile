@@ -44,7 +44,7 @@ WORKDIR /app
 # uploads fail at ingest rather than at startup, which is a confusing way to
 # find out it is missing.
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y tesseract-ocr curl \
+    && apt-get install --no-install-recommends -y tesseract-ocr curl gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # Dependencies before source, so a code change doesn't reinstall torch.
@@ -105,7 +105,17 @@ ENV DATA_ROOT=/data/workspaces \
 RUN useradd --create-home --uid 1000 scholar \
     && mkdir -p /data \
     && chown -R scholar:scholar /data /app
-USER scholar
+
+COPY docker-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+# Deliberately NO `USER scholar` here. The chown above applies to the image, but
+# a platform that mounts a volume over /data replaces that directory and its
+# ownership at runtime — Railway bind-mounts it root-owned, and the app then
+# cannot open its own database. Fixing that needs root; running the app as root
+# does not. So the entrypoint starts as root purely to chown the mount, then
+# execs the app as `scholar`. The app process itself never runs as root.
+ENTRYPOINT ["docker-entrypoint.sh"]
 
 EXPOSE 8001
 

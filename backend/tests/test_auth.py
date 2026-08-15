@@ -6,6 +6,7 @@ that needs no running server, no Ollama and no models.
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.config import settings
 from backend.tests.conftest import csrf
 
 GOOD = {"email": "alice@example.com", "password": "validpassword123"}
@@ -149,8 +150,20 @@ def test_security_headers_are_set(client: TestClient):
     """Baseline browser defences ride on every response, including errors."""
     h = client.get("/health").headers
     assert h["X-Content-Type-Options"] == "nosniff"
-    assert h["X-Frame-Options"] == "DENY"
-    assert "frame-ancestors 'none'" in h["Content-Security-Policy"]
+    assert h["Referrer-Policy"] == "no-referrer"
+    assert "default-src 'none'" in h["Content-Security-Policy"]
+    assert "base-uri 'none'" in h["Content-Security-Policy"]
+
+
+def test_the_frontend_may_frame_this_origin(client: TestClient):
+    """The source viewer shows a stored PDF in an iframe, so the frontend has to
+    be allowed to frame us. Guards two ways of breaking it: sending
+    X-Frame-Options: DENY (which overrides CSP and cannot express a cross-origin
+    allowance), or omitting the frontend origin from frame-ancestors.
+    """
+    h = client.get("/health").headers
+    assert "X-Frame-Options" not in h, "X-Frame-Options would override frame-ancestors"
+    assert settings.frontend_origin in h["Content-Security-Policy"]
 
 
 # ——— CSRF double-submit ———

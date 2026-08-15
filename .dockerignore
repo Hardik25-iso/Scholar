@@ -1,0 +1,30 @@
+# Keep the build context small and, more importantly, keep secrets and user
+# data out of the image entirely.
+
+# Secrets — never in an image layer.
+.env
+.env.*
+!.env.example
+
+# User data: libraries, indexes, the database. Belongs on a mounted volume.
+data/
+
+# Local Python environment (wrong platform, and huge).
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Installed and built inside the image instead.
+frontend/node_modules/
+frontend/dist/
+
+# Not needed to run the app.
+.git/
+.github/
+.claude/
+backend/tests/
+backend/eval/
+refferences/
+*.md
+!README.md

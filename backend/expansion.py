@@ -123,7 +123,11 @@ def expansion_terms(
     return [term for _, term in scored[:max_terms]]
 
 
-HYDE_PROMPT = """Write one short sentence that could plausibly appear in a \
+# A hypothetical answer only needs to be a sentence or two — it is embedded for
+# retrieval, never shown, so more tokens buy nothing but latency and cost.
+_HYDE_MAX_TOKENS = 60
+
+HYDE_PROMPT ="""Write one short sentence that could plausibly appear in a \
 document as the answer to the question. Use the formal vocabulary such a \
 document would use, not the wording of the question. Do not hedge, do not \
 explain, do not say you are unsure — invent specifics if you must. Reply with \
@@ -145,19 +149,17 @@ def hypothetical_answer(query: str) -> str:
     hypothetical it used, or that promise quietly stops being true. Temperature
     is 0 to make that as close to reproducible as a local LLM allows.
     """
-    # _chat, not ollama.chat: the bare helper has no timeout, so a hung model
-    # would never return and the `except` below could never run — the graceful
-    # degradation that makes expansion safe depends on the call being bounded.
-    from backend.generator import MODEL, _chat
+    # Go through the provider, never a bare SDK call: every provider bounds its
+    # requests with a timeout, and the graceful degradation below depends on the
+    # call actually returning — a hung request would never reach the `except`.
+    from backend.llm import get_provider
 
     try:
-        response = _chat(
-            model=MODEL,
-            messages=[{"role": "system", "content": HYDE_PROMPT},
-                      {"role": "user", "content": query}],
-            options={"temperature": 0.0, "num_predict": 60},
-        )
-        return response["message"]["content"].strip()
+        return get_provider().complete(
+            system=HYDE_PROMPT,
+            user=query,
+            max_tokens=_HYDE_MAX_TOKENS,
+        ).strip()
     except Exception as exc:  # noqa: BLE001 — expansion is an optimisation
         # Degrade to no expansion rather than failing the question. Expansion
         # improves recall; it is not required for a correct answer, and a

@@ -5,49 +5,16 @@ retrieved passages as numbered sources and instruct it to answer using ONLY
 those. That constraint is the whole point: it turns a general LLM into a
 system that can only speak from the papers, and cite where each claim came from.
 
-The LLM is Gemma 3 4B, running locally via Ollama (no API cost, on-device).
-Swapping models later means changing MODEL below — nothing else in the app.
+WHICH model writes the words is a config choice, not a code one — see llm.py.
+Locally that is Gemma 3 4B via Ollama (free, private); a deployed instance uses
+a hosted model instead. The prompts, grounding contract, and citation format in
+this file are identical either way, which is what makes the swap safe.
 """
 from collections.abc import Iterator
 
-import httpx
-import ollama
-
 from backend.config import settings
+from backend.llm import LLMUnavailable, get_provider  # noqa: F401 (re-exported)
 from backend.models import Answer, ChatTurn, Citation
-
-MODEL = "gemma3:4b"
-
-
-class LLMUnavailable(RuntimeError):
-    """The model did not answer in time, or Ollama is not reachable.
-
-    Raised instead of letting httpx's error surface, so callers (the /ask routes)
-    can turn it into a clean 503 rather than a 500 with a stack trace.
-    """
-
-
-# One shared client with an explicit timeout. The module-level `ollama.chat`
-# helper has NO timeout: if the model hangs, the call never returns and the
-# threadpool worker serving that request is pinned forever. Enough of those and
-# the app stops answering entirely while still reporting itself healthy.
-_client = ollama.Client(timeout=settings.llm_timeout_seconds)
-
-
-def _chat(**kwargs):
-    """ollama.chat with a timeout, and connection/timeout errors normalised."""
-    try:
-        return _client.chat(**kwargs)
-    except (httpx.TimeoutException, httpx.ConnectError, ConnectionError) as exc:
-        raise LLMUnavailable(
-            f"the local model did not respond within "
-            f"{settings.llm_timeout_seconds:.0f}s (is Ollama running?)"
-        ) from exc
-
-# temperature 0 => deterministic, faithful answers (no creative drift). Named
-# rather than inlined because the audit log records it: "which model, at what
-# temperature" is part of explaining why two answers differed.
-TEMPERATURE = 0.0
 
 # The system prompt encodes the grounding contract. Kept strict on purpose:
 # use only the sources, cite by number, and refuse when the answer isn't there.
@@ -62,6 +29,26 @@ Rules:
 - Be concise and precise. Do not invent citations."""
 
 
+def active_model() -> str:
+    """The model that will answer right now — recorded in the audit log.
+
+    "Which model produced this answer" is the single most useful field for
+    explaining why two answers to the same question differ, so it is read from
+    the live provider rather than hard-coded.
+    """
+    return get_provider().MODEL
+
+
+def active_temperature() -> float:
+    """The sampling temperature actually in effect, for the audit log.
+
+    Both providers pin this to 0 for reproducibility, which is what the audit
+    log's "same question, same answer" promise rests on. Read from the provider
+    rather than hard-coded so the log stays true if that ever stops holding.
+    """
+    return get_provider().TEMPERATURE
+
+
 def _format_sources(citations: list[Citation]) -> str:
     """Render citations as the numbered [n] blocks the prompt refers to."""
     blocks = []
@@ -72,25 +59,33 @@ def _format_sources(citations: list[Citation]) -> str:
     return "\n\n".join(blocks)
 
 
-def generate(question: str, citations: list[Citation]) -> Answer:
-    """Ask the local LLM to answer `question` grounded in `citations`."""
-    response = _chat(
-        model=MODEL,
-        messages=_messages(question, citations),
-        options={"temperature": TEMPERATURE},
-    )
+def _user_message(question: str, citations: list[Citation]) -> str:
+    """The user turn shared by the batch and streaming paths."""
+    return f"Sources:\n\n{_format_sources(citations)}\n\nQuestion: {question}"
 
-    answer_text = response["message"]["content"].strip()
+
+def generate(question: str, citations: list[Citation]) -> Answer:
+    """Ask the configured LLM to answer `question` grounded in `citations`."""
+    answer_text = get_provider().complete(
+        system=SYSTEM_PROMPT,
+        user=_user_message(question, citations),
+        max_tokens=settings.llm_max_tokens,
+    )
     return Answer(question=question, answer=answer_text, citations=citations)
 
 
-def _messages(question: str, citations: list[Citation]) -> list[dict[str, str]]:
-    """The system + user turns shared by the batch and streaming paths."""
-    user_message = f"Sources:\n\n{_format_sources(citations)}\n\nQuestion: {question}"
-    return [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_message},
-    ]
+def stream_answer(question: str, citations: list[Citation]) -> Iterator[str]:
+    """Yield the grounded answer as incremental text deltas, as the LLM writes.
+
+    Same prompt and grounding contract as generate(); only the transport differs
+    (token-by-token instead of one blocking blob). The caller already holds the
+    citations, so it can show sources immediately and stream the prose on top.
+    """
+    yield from get_provider().stream(
+        system=SYSTEM_PROMPT,
+        user=_user_message(question, citations),
+        max_tokens=settings.llm_max_tokens,
+    )
 
 
 CONDENSE_PROMPT = """Given the conversation so far and a follow-up question, \
@@ -103,6 +98,9 @@ Return ONLY the rewritten question, nothing else."""
 # resolving a follow-up, and a short prompt keeps this extra call fast.
 _CONDENSE_HISTORY_TURNS = 4
 
+# A standalone question is one sentence; this caps the extra call's cost.
+_CONDENSE_MAX_TOKENS = 80
+
 
 def condense_question(question: str, history: list[ChatTurn]) -> str:
     """Rewrite a follow-up into a standalone question using recent history.
@@ -114,61 +112,27 @@ def condense_question(question: str, history: list[ChatTurn]) -> str:
         return question
     recent = history[-_CONDENSE_HISTORY_TURNS:]
     convo = "\n".join(f"Q: {t.question}\nA: {t.answer}" for t in recent)
-    response = _chat(
-        model=MODEL,
-        messages=[
-            {"role": "system", "content": CONDENSE_PROMPT},
-            {"role": "user",
-             "content": f"Conversation:\n{convo}\n\nFollow-up: {question}\n\nStandalone question:"},
-        ],
-        options={"temperature": 0.0, "num_predict": 80},
+    rewritten = get_provider().complete(
+        system=CONDENSE_PROMPT,
+        user=f"Conversation:\n{convo}\n\nFollow-up: {question}\n\nStandalone question:",
+        max_tokens=_CONDENSE_MAX_TOKENS,
     )
-    return response["message"]["content"].strip() or question
+    return rewritten.strip() or question
 
 
 def ping_llm() -> None:
-    """Cheap liveness probe for the LLM: does the Ollama daemon answer, and is
-    our model present? Used by /health, so it must stay fast — listing models
-    costs nothing, whereas generating a token would make /health as slow as /ask.
+    """Cheap liveness probe used by /health.
+
+    Must stay fast: it confirms the provider answers and the configured model
+    exists, without generating a token — a full generation would make /health as
+    slow and expensive as /ask.
     """
-    try:
-        result = _client.list()
-    except (httpx.TimeoutException, httpx.ConnectError, ConnectionError) as exc:
-        raise LLMUnavailable("Ollama is not reachable") from exc
-    names = {m.get("model") or m.get("name") for m in result.get("models", [])}
-    if MODEL not in names:
-        raise LLMUnavailable(f"model {MODEL} is not pulled (run: ollama pull {MODEL})")
+    get_provider().ping()
 
 
 def warm_llm() -> None:
-    """Trigger Ollama to load the model into memory now, so the first real
-    answer doesn't pay the ~30s+ cold-load. A 1-token generation is enough."""
-    _chat(
-        model=MODEL,
-        messages=[{"role": "user", "content": "hi"}],
-        options={"num_predict": 1},
-    )
+    """Preload the model so the first real answer doesn't pay the cold start.
 
-
-def stream_answer(question: str, citations: list[Citation]) -> Iterator[str]:
-    """Yield the grounded answer as incremental text deltas, as the LLM writes.
-
-    Same prompt and grounding contract as generate(); only the transport differs
-    (token-by-token instead of one blocking blob). The caller already holds the
-    citations, so it can show sources immediately and stream the prose on top.
+    A no-op on hosted providers, which have nothing local to load.
     """
-    stream = _chat(
-        model=MODEL,
-        messages=_messages(question, citations),
-        options={"temperature": TEMPERATURE},
-        stream=True,
-    )
-    # The timeout also covers the gaps BETWEEN chunks, so a model that stalls
-    # mid-answer raises here rather than leaving the stream open indefinitely.
-    try:
-        for part in stream:
-            delta = part["message"]["content"]
-            if delta:
-                yield delta
-    except (httpx.TimeoutException, httpx.ConnectError, ConnectionError) as exc:
-        raise LLMUnavailable("the local model stalled mid-answer") from exc
+    get_provider().warm()

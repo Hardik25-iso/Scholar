@@ -16,10 +16,12 @@ import json
 import logging
 import threading
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlmodel import Session
 
@@ -116,25 +118,46 @@ async def llm_unavailable_handler(request, exc: generator.LLMUnavailable):
     )
 
 
+# Content-Security-Policy depends on what this process actually serves.
+#
+# Framing: the source viewer renders a stored PDF in an iframe, so this origin
+# MUST be framable by the frontend — in development that is a different origin
+# (5173 vs 8001). X-Frame-Options cannot express a cross-origin allowance
+# (ALLOW-FROM is dead in every current browser), so framing is controlled by
+# `frame-ancestors` alone and X-Frame-Options is deliberately not sent: a DENY
+# there would override this and break the citation viewer.
+#
+# API-only (development): nothing may load. That is the strictest useful policy
+# and it matters because user-uploaded PDFs are served from this origin — a
+# malicious upload must not be able to execute against our auth cookie.
+#
+# API + SPA (deployment): the page needs its own bundle, so scripts and styles
+# from this origin are allowed and everything else stays denied.
+def _frame_ancestors() -> str:
+    return f"frame-ancestors 'self' {settings.frontend_origin}"
+
+
+def _csp() -> str:
+    if _FRONTEND_DIST.is_dir():
+        return (
+            "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; font-src 'self' data:; connect-src 'self'; "
+            f"frame-src 'self'; {_frame_ancestors()}; base-uri 'none'"
+        )
+    return f"default-src 'none'; {_frame_ancestors()}; base-uri 'none'"
+
+
 @app.middleware("http")
 async def security_headers(request, call_next):
     """Baseline browser defences on every response.
 
-    This API serves JSON and user-uploaded PDFs — never HTML — so the CSP can be
-    maximally restrictive: nothing is allowed to load, and framing is denied
-    outright. That matters because uploaded PDFs are served from this origin;
-    without it a malicious PDF/HTML upload could execute against our cookie.
     HSTS is only meaningful over TLS, so it is sent only when cookies are
     already in secure mode (i.e. deployed behind HTTPS), never in local dev.
     """
     response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
-    response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "no-referrer")
-    response.headers.setdefault(
-        "Content-Security-Policy",
-        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
-    )
+    response.headers.setdefault("Content-Security-Policy", _csp())
     if settings.cookie_secure:
         response.headers.setdefault(
             "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
@@ -220,8 +243,8 @@ def _record(session: Session, user_id: int, workspace_id: int, request: AskReque
     audit.record(
         session, user_id, workspace_id, request, query, answer,
         index_dir=library.workspace_index_dir(workspace_id),
-        model=generator.MODEL,
-        temperature=generator.TEMPERATURE,
+        model=generator.active_model(),
+        temperature=generator.active_temperature(),
         retrieval_query=retrieval_query,
         expansion_mode=settings.query_expansion,
     )
@@ -305,3 +328,36 @@ def ask_stream(
                 retrieval_query)
 
     return StreamingResponse(ndjson(), media_type="application/x-ndjson")
+
+
+# ——— serving the built frontend (deployment only) ———
+#
+# In development the frontend is a separate Vite server on :5173 and this block
+# does nothing (frontend/dist does not exist). In a container the built SPA is
+# copied in and served from this same origin, which is what makes the auth
+# cookie same-site in production — see VITE_API_BASE in frontend/src/api.ts.
+#
+# Mounted LAST so every API route above wins: only paths that matched no route
+# reach the SPA fallback.
+_FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
+
+if _FRONTEND_DIST.is_dir():
+    app.mount(
+        "/assets",
+        StaticFiles(directory=_FRONTEND_DIST / "assets"),
+        name="assets",
+    )
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def spa(full_path: str) -> FileResponse:
+        """Serve index.html for any unmatched path.
+
+        The SPA owns client-side routes like /login and /app; a browser asking
+        the server for those directly (a refresh, or a shared link) must still
+        get the app shell rather than a 404. Real files are served as-is so
+        favicons and similar keep working.
+        """
+        candidate = _FRONTEND_DIST / full_path
+        if full_path and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(_FRONTEND_DIST / "index.html")

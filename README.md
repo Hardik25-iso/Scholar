@@ -245,11 +245,28 @@ cd frontend && npm run build
 
 ## Deployment
 
-Three things separate a working local install from something you can put in front of users:
+A [`Dockerfile`](Dockerfile) builds one image serving the API and the built frontend from a single
+origin — which also makes the auth cookie same-site in production, so the cross-origin cookie
+handling that development needs disappears once deployed. The embedding, tokenizer and reranker
+models are baked in at build time; without that, the first question after every deploy downloads
+~500 MB inside the request and a cold container looks broken for minutes.
 
+```bash
+docker build -t scholar . && docker run -p 8001:8001 --env-file .env -v scholar-data:/data scholar
+```
+
+Four things separate a working local install from something you can put in front of users:
+
+0. **Generation must move off Ollama.** The image contains no Ollama, because a hosted box has none
+   and nobody will install a 3.3 GB model to try your site. Set `LLM_PROVIDER=hosted` with
+   `LLM_BASE_URL`, `LLM_MODEL` and `LLM_API_KEY` pointing at any OpenAI-compatible endpoint — Groq,
+   Google's Gemini/Gemma API and OpenRouter all speak that protocol and all have free tiers, so
+   changing vendor is two environment variables rather than a code change. Left on the default the
+   container still starts and serves the site; every question returns 503, and `/health` reports it
+   rather than claiming to be ready.
 1. **`DATA_ROOT` must point at a mounted volume.** The default lives inside the source tree, so a
    redeploy that replaces the source destroys every library. Backup and restore are implemented and
-   tested (`backend/backup.py`).
+   tested (`backend/backup.py`). The image sets it to `/data` and declares the volume.
 2. **`SMTP_HOST` must be set.** Without it, password-reset and invitation tokens are written to the
    log — workable on a laptop, an account-takeover vector on a server. The app says so at WARNING
    level every time.
@@ -274,8 +291,10 @@ note saying exactly this.
 
 ## Known limits
 
-- **Generation runs locally through Ollama** (Gemma 3 4B). Answer quality is bounded by the local
-  model; retrieval quality — every number above — is measured independently of it.
+- **Generation defaults to local Ollama** (Gemma 3 4B), so answer quality is bounded by a 4B model.
+  A deployment swaps in a hosted model through the same seam (`backend/llm.py`) without touching the
+  prompts or the grounding contract. Retrieval quality — every number above — is measured
+  independently of whichever model writes the prose.
 - **The eval set is 51 questions over 7 documents.** Large enough to catch regressions, small enough
   that a single question moves a percentage point. Treat deltas, not absolutes, as the signal.
 - **OCR needs the Tesseract binary.** Without it a scanned PDF fails with a message naming the

@@ -1,7 +1,11 @@
 /** Typed client for the Scholar backend — mirrors backend/models.py exactly. */
 
 // Scholar's backend runs on 8001 (port 8000 is used by another local project).
-const API_BASE = "http://localhost:8001";
+// In development the API is a separate origin (Vite on 5173, FastAPI on 8001).
+// In a deployed build VITE_API_BASE is set to "" so every call is same-origin —
+// which also makes the auth cookie same-site, removing the cross-origin cookie
+// handling that dev needs. `??` (not `||`) so an intentional "" survives.
+const API_BASE: string = import.meta.env.VITE_API_BASE ?? "http://localhost:8001";
 
 export interface Citation {
   paper_id: string;

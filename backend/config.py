@@ -3,9 +3,10 @@
 All runtime knobs live here so nothing secret is hard-coded. Values come from
 (in order) real environment variables, then the .env file (git-ignored).
 
-NOTE: .env may hold unrelated legacy keys from earlier experiments; they are NOT
-used by Scholar (generation runs locally via Ollama). `extra="ignore"` below lets
-pydantic-settings tolerate such stray keys instead of failing at startup.
+`extra="ignore"` below lets pydantic-settings tolerate stray keys in .env instead
+of failing at startup — including the legacy ANTHROPIC_API_KEY from an earlier
+experiment, which Scholar does not read. (It should still be rotated: it was
+exposed in this project's history. Nothing here depends on it.)
 """
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -67,6 +68,42 @@ class Settings(BaseSettings):
     # a cold model load plus a long grounded answer can legitimately take a
     # while on CPU (measured ~44s cold, ~8s warm to first token).
     llm_timeout_seconds: float = 180.0
+
+    # ——— Which LLM generates answers ———
+    #
+    # "ollama" (default) runs gemma3:4b on this machine: free, private, and the
+    # right choice for local development — but it cannot be deployed, because a
+    # hosted box has no Ollama and nobody is going to install a 3.3 GB model to
+    # try your site. "hosted" points at any OpenAI-compatible endpoint so
+    # Scholar can run somewhere real. Only the provider changes: retrieval,
+    # reranking, citations and the grounding contract are identical either way.
+    llm_provider: str = "ollama"  # "ollama" | "hosted"
+
+    # Required when llm_provider="hosted"; all three, or startup fails loudly
+    # rather than the first question failing. Vendor-neutral on purpose — the
+    # OpenAI chat protocol is the de-facto standard, so the same three values
+    # select Groq, Google's Gemini/Gemma API, OpenRouter, or a self-hosted
+    # server, with no code change. Free-tier examples:
+    #
+    #   Groq        LLM_BASE_URL=https://api.groq.com/openai/v1
+    #               LLM_MODEL=llama-3.3-70b-versatile   (Groq retired Gemma;
+    #               Gemma now lives on Google's endpoint below)
+    #   Gemini      LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
+    #               LLM_MODEL=gemini-2.0-flash
+    #   OpenRouter  LLM_BASE_URL=https://openrouter.ai/api/v1
+    #               LLM_MODEL=<a model whose id ends in :free>
+    #
+    # Model ids change as vendors add and retire models — check the provider's
+    # current list rather than trusting these examples. A wrong id surfaces as a
+    # clear "does not serve a model named ..." error, not a silent fallback.
+    llm_base_url: str = ""
+    llm_api_key: str = ""
+    llm_model: str = ""
+
+    # Ceiling on a generated answer. Grounded answers are short by design (a few
+    # paragraphs citing retrieved passages), so this is a runaway guard, not a
+    # target — and it caps spend per question on the hosted path.
+    llm_max_tokens: int = 2048
 
     # Cookie flags. In local dev over http://localhost, SameSite=Lax works
     # without Secure (localhost is treated as same-site + a secure context).

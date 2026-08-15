@@ -116,20 +116,39 @@ def test_a_valid_csrf_pair_alone_does_not_authenticate(client: TestClient, path)
 
 
 def test_health_needs_no_auth(client: TestClient):
+    """Anonymous callers get an answer, not a challenge.
+
+    Asserts only that authentication is not required — NOT that the instance is
+    ready. 200 and 503 are both valid here (503 means a dependency is down),
+    and conflating the two makes this test fail wherever no LLM is running,
+    which is every CI machine.
+    """
     r = client.get("/health")
-    assert r.status_code == 200
-    assert r.json()["status"] == "ok"
+    assert r.status_code not in (401, 403)
+    assert "status" in r.json()
 
 
-def test_health_reports_each_dependency(client: TestClient):
+def test_health_reports_each_dependency(client: TestClient, monkeypatch):
     """/health is a READINESS check: it names what it verified.
 
     A check that only proves the process is alive reports green while every
     question fails, so it must exercise the things an answer depends on.
+
+    The LLM is stubbed so this asserts the app's own logic rather than whether
+    the machine running the tests happens to have Ollama up — this suite is
+    meant to need no server, no Ollama and no models.
     """
-    checks = client.get("/health").json()["checks"]
+    from backend import generator
+
+    monkeypatch.setattr(generator, "ping_llm", lambda: None)
+    r = client.get("/health")
+    checks = r.json()["checks"]
+
     assert set(checks) == {"database", "embedder", "llm"}
     assert all(v == "ok" for v in checks.values()), checks
+    # All dependencies healthy => ready. The 503 path is covered below.
+    assert r.status_code == 200
+    assert r.json()["status"] == "ok"
 
 
 def test_health_is_503_when_a_dependency_is_down(client: TestClient, monkeypatch):

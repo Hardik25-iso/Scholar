@@ -32,6 +32,7 @@ from backend import library  # noqa: E402
 from backend.api import app  # noqa: E402
 from backend.config import settings  # noqa: E402
 from backend.db import engine, init_db  # noqa: E402
+from backend.ratelimit import ask_limiter, auth_limiter, upload_limiter  # noqa: E402
 
 library.DATA_ROOT = _TMP / "workspaces"
 # Redirected too, and NOT an afterthought: the migration tests write into the
@@ -73,6 +74,21 @@ def pytest_sessionfinish(session, exitstatus):
 @pytest.fixture(scope="session", autouse=True)
 def _database():
     init_db()
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limits():
+    """Give every test a fresh rate-limit budget.
+
+    The limiters are process-global counters, so without this the suite's own
+    traffic accumulates: tests that register several accounts exhaust the
+    per-IP auth budget and later tests fail with 429 for reasons that have
+    nothing to do with what they assert. Same principle as the fresh database —
+    a test must not inherit state from the one before it.
+    """
+    for limiter in (auth_limiter, ask_limiter, upload_limiter):
+        limiter.reset()
+    yield
 
 
 @pytest.fixture

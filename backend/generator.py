@@ -10,11 +10,39 @@ Swapping models later means changing MODEL below — nothing else in the app.
 """
 from collections.abc import Iterator
 
+import httpx
 import ollama
 
+from backend.config import settings
 from backend.models import Answer, ChatTurn, Citation
 
 MODEL = "gemma3:4b"
+
+
+class LLMUnavailable(RuntimeError):
+    """The model did not answer in time, or Ollama is not reachable.
+
+    Raised instead of letting httpx's error surface, so callers (the /ask routes)
+    can turn it into a clean 503 rather than a 500 with a stack trace.
+    """
+
+
+# One shared client with an explicit timeout. The module-level `ollama.chat`
+# helper has NO timeout: if the model hangs, the call never returns and the
+# threadpool worker serving that request is pinned forever. Enough of those and
+# the app stops answering entirely while still reporting itself healthy.
+_client = ollama.Client(timeout=settings.llm_timeout_seconds)
+
+
+def _chat(**kwargs):
+    """ollama.chat with a timeout, and connection/timeout errors normalised."""
+    try:
+        return _client.chat(**kwargs)
+    except (httpx.TimeoutException, httpx.ConnectError, ConnectionError) as exc:
+        raise LLMUnavailable(
+            f"the local model did not respond within "
+            f"{settings.llm_timeout_seconds:.0f}s (is Ollama running?)"
+        ) from exc
 
 # temperature 0 => deterministic, faithful answers (no creative drift). Named
 # rather than inlined because the audit log records it: "which model, at what
@@ -46,7 +74,7 @@ def _format_sources(citations: list[Citation]) -> str:
 
 def generate(question: str, citations: list[Citation]) -> Answer:
     """Ask the local LLM to answer `question` grounded in `citations`."""
-    response = ollama.chat(
+    response = _chat(
         model=MODEL,
         messages=_messages(question, citations),
         options={"temperature": TEMPERATURE},
@@ -86,7 +114,7 @@ def condense_question(question: str, history: list[ChatTurn]) -> str:
         return question
     recent = history[-_CONDENSE_HISTORY_TURNS:]
     convo = "\n".join(f"Q: {t.question}\nA: {t.answer}" for t in recent)
-    response = ollama.chat(
+    response = _chat(
         model=MODEL,
         messages=[
             {"role": "system", "content": CONDENSE_PROMPT},
@@ -98,10 +126,24 @@ def condense_question(question: str, history: list[ChatTurn]) -> str:
     return response["message"]["content"].strip() or question
 
 
+def ping_llm() -> None:
+    """Cheap liveness probe for the LLM: does the Ollama daemon answer, and is
+    our model present? Used by /health, so it must stay fast — listing models
+    costs nothing, whereas generating a token would make /health as slow as /ask.
+    """
+    try:
+        result = _client.list()
+    except (httpx.TimeoutException, httpx.ConnectError, ConnectionError) as exc:
+        raise LLMUnavailable("Ollama is not reachable") from exc
+    names = {m.get("model") or m.get("name") for m in result.get("models", [])}
+    if MODEL not in names:
+        raise LLMUnavailable(f"model {MODEL} is not pulled (run: ollama pull {MODEL})")
+
+
 def warm_llm() -> None:
     """Trigger Ollama to load the model into memory now, so the first real
     answer doesn't pay the ~30s+ cold-load. A 1-token generation is enough."""
-    ollama.chat(
+    _chat(
         model=MODEL,
         messages=[{"role": "user", "content": "hi"}],
         options={"num_predict": 1},
@@ -115,13 +157,18 @@ def stream_answer(question: str, citations: list[Citation]) -> Iterator[str]:
     (token-by-token instead of one blocking blob). The caller already holds the
     citations, so it can show sources immediately and stream the prose on top.
     """
-    stream = ollama.chat(
+    stream = _chat(
         model=MODEL,
         messages=_messages(question, citations),
         options={"temperature": TEMPERATURE},
         stream=True,
     )
-    for part in stream:
-        delta = part["message"]["content"]
-        if delta:
-            yield delta
+    # The timeout also covers the gaps BETWEEN chunks, so a model that stalls
+    # mid-answer raises here rather than leaving the stream open indefinitely.
+    try:
+        for part in stream:
+            delta = part["message"]["content"]
+            if delta:
+                yield delta
+    except (httpx.TimeoutException, httpx.ConnectError, ConnectionError) as exc:
+        raise LLMUnavailable("the local model stalled mid-answer") from exc

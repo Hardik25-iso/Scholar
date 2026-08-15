@@ -17,9 +17,10 @@ import logging
 import threading
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+from sqlalchemy import text
 from sqlmodel import Session
 
 from backend import audit, generator, library
@@ -27,7 +28,7 @@ from backend.audit_routes import router as audit_router
 from backend.auth import get_current_user, require_csrf, router as auth_router
 from backend.search import shortlist
 from backend.config import settings
-from backend.db import get_session, init_db
+from backend.db import engine, get_session, init_db
 from backend.db_models import User, Workspace
 from backend.embedder import embed
 from backend.generator import condense_question, generate, stream_answer, warm_llm
@@ -100,6 +101,47 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.exception_handler(generator.LLMUnavailable)
+async def llm_unavailable_handler(request, exc: generator.LLMUnavailable):
+    """A timed-out or unreachable model is a 503, not a 500.
+
+    503 says "this dependency is down, retry later" — which is both true and
+    actionable — instead of a stack trace that reads like a bug in Scholar.
+    """
+    log.warning("LLM unavailable on %s: %s", request.url.path, exc)
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={"detail": str(exc)},
+        headers={"Retry-After": "30"},
+    )
+
+
+@app.middleware("http")
+async def security_headers(request, call_next):
+    """Baseline browser defences on every response.
+
+    This API serves JSON and user-uploaded PDFs — never HTML — so the CSP can be
+    maximally restrictive: nothing is allowed to load, and framing is denied
+    outright. That matters because uploaded PDFs are served from this origin;
+    without it a malicious PDF/HTML upload could execute against our cookie.
+    HSTS is only meaningful over TLS, so it is sent only when cookies are
+    already in secure mode (i.e. deployed behind HTTPS), never in local dev.
+    """
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    )
+    if settings.cookie_secure:
+        response.headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+        )
+    return response
+
+
 app.include_router(auth_router)
 app.include_router(papers_router)
 app.include_router(audit_router)
@@ -107,8 +149,42 @@ app.include_router(workspace_router)
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health(response: Response) -> dict[str, object]:
+    """Liveness AND readiness: can this instance actually serve a question?
+
+    A health check that only proves the process is running is worse than none —
+    it reports green while every /ask fails. This exercises the three things an
+    answer depends on: the database, the embedding model, and the LLM. Returns
+    503 when any of them is down so a load balancer stops sending traffic.
+    """
+    checks: dict[str, str] = {}
+
+    try:
+        with Session(engine) as probe:
+            probe.exec(text("SELECT 1"))
+        checks["database"] = "ok"
+    except Exception as exc:  # noqa: BLE001 — any failure means "not ready"
+        checks["database"] = f"error: {exc}"
+
+    # Embedder: already loaded by the warm thread; this confirms it can encode.
+    try:
+        embed(["health check"], progress=False)
+        checks["embedder"] = "ok"
+    except Exception as exc:  # noqa: BLE001
+        checks["embedder"] = f"error: {exc}"
+
+    # LLM: ask Ollama to list models — cheap, and proves the daemon answers.
+    # A full generation would make /health as slow and expensive as /ask.
+    try:
+        generator.ping_llm()
+        checks["llm"] = "ok"
+    except Exception as exc:  # noqa: BLE001
+        checks["llm"] = f"error: {exc}"
+
+    healthy = all(v == "ok" for v in checks.values())
+    if not healthy:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    return {"status": "ok" if healthy else "degraded", "checks": checks}
 
 
 # Plain `def` (not async): generate() calls a blocking LLM. FastAPI runs sync

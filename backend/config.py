@@ -55,6 +55,19 @@ class Settings(BaseSettings):
     ask_rate_limit_per_hour: int = 120
     upload_rate_limit_per_hour: int = 60
 
+    # Auth attempts per hour PER CLIENT IP (not per user — a login attempt has
+    # no authenticated user yet, and keying on the submitted email would let an
+    # attacker lock a victim out by spamming their address). This is the
+    # brute-force guard: generous enough that a person fumbling their password
+    # never notices, tight enough that credential stuffing is not viable.
+    auth_rate_limit_per_hour: int = 20
+
+    # How long to wait on the LLM before giving up. Without this a hung local
+    # model pins a threadpool worker forever and the app slowly dies. Generous:
+    # a cold model load plus a long grounded answer can legitimately take a
+    # while on CPU (measured ~44s cold, ~8s warm to first token).
+    llm_timeout_seconds: float = 180.0
+
     # Cookie flags. In local dev over http://localhost, SameSite=Lax works
     # without Secure (localhost is treated as same-site + a secure context).
     # Set cookie_secure=True (and SameSite=None) once served over HTTPS.

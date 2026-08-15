@@ -16,6 +16,8 @@ Personal libraries are ordinary workspaces flagged `is_personal`, so there is
 exactly one storage and retrieval path rather than two that drift apart.
 """
 import re
+import threading
+from collections import OrderedDict
 from pathlib import Path
 
 from backend import lexical
@@ -39,7 +41,15 @@ LEGACY_DATA_ROOT = Path(settings.data_root).parent / "users" if settings.data_ro
 # One loaded Retriever per workspace, reused across /ask calls (loading the
 # FAISS index + chunks.json every request would be wasteful). Invalidated
 # whenever the workspace's index changes, so it never serves a stale library.
-_retrievers: dict[int, Retriever] = {}
+#
+# BOUNDED, because each entry holds a whole FAISS index plus its chunk text in
+# memory. Unbounded, this grows with the number of workspaces ever queried and
+# never gives anything back — fine for one user, a slow leak for many. An
+# OrderedDict used as an LRU: least-recently-used is evicted past the cap, and
+# an evicted workspace simply reloads from disk on its next question.
+_RETRIEVER_CACHE_SIZE = 8
+_retrievers: OrderedDict[int, Retriever] = OrderedDict()
+_retrievers_lock = threading.Lock()
 
 
 def workspace_index_dir(workspace_id: int) -> Path:
@@ -56,16 +66,38 @@ def slugify(name: str) -> str:
 
 
 def invalidate(workspace_id: int) -> None:
-    _retrievers.pop(workspace_id, None)
+    with _retrievers_lock:
+        _retrievers.pop(workspace_id, None)
 
 
 def get_retriever(workspace_id: int) -> Retriever | None:
     """The workspace's retriever, or None if nothing has been indexed yet."""
     if not (workspace_index_dir(workspace_id) / "index.faiss").exists():
         return None
-    if workspace_id not in _retrievers:
-        _retrievers[workspace_id] = Retriever(workspace_index_dir(workspace_id))
-    return _retrievers[workspace_id]
+
+    # Locked: FastAPI serves sync endpoints from a threadpool, so several
+    # requests can reach this concurrently and would otherwise race on eviction.
+    with _retrievers_lock:
+        cached = _retrievers.get(workspace_id)
+        if cached is not None:
+            _retrievers.move_to_end(workspace_id)  # mark recently used
+            return cached
+
+    # Load OUTSIDE the lock — reading a large index off disk would otherwise
+    # block every other workspace's lookup for the duration.
+    retriever = Retriever(workspace_index_dir(workspace_id))
+
+    with _retrievers_lock:
+        # Another thread may have loaded it meanwhile; prefer the existing one
+        # so callers never hold two different objects for the same workspace.
+        existing = _retrievers.get(workspace_id)
+        if existing is not None:
+            _retrievers.move_to_end(workspace_id)
+            return existing
+        _retrievers[workspace_id] = retriever
+        while len(_retrievers) > _RETRIEVER_CACHE_SIZE:
+            _retrievers.popitem(last=False)  # evict least-recently-used
+        return retriever
 
 
 def stored_path(workspace_id: int, paper_id: str) -> Path | None:

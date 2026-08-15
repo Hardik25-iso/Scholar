@@ -115,7 +115,42 @@ def test_a_valid_csrf_pair_alone_does_not_authenticate(client: TestClient, path)
 
 
 def test_health_needs_no_auth(client: TestClient):
-    assert client.get("/health").json() == {"status": "ok"}
+    r = client.get("/health")
+    assert r.status_code == 200
+    assert r.json()["status"] == "ok"
+
+
+def test_health_reports_each_dependency(client: TestClient):
+    """/health is a READINESS check: it names what it verified.
+
+    A check that only proves the process is alive reports green while every
+    question fails, so it must exercise the things an answer depends on.
+    """
+    checks = client.get("/health").json()["checks"]
+    assert set(checks) == {"database", "embedder", "llm"}
+    assert all(v == "ok" for v in checks.values()), checks
+
+
+def test_health_is_503_when_a_dependency_is_down(client: TestClient, monkeypatch):
+    """Down dependency => 503, so a load balancer stops sending traffic here."""
+    from backend import generator
+
+    def _dead():
+        raise generator.LLMUnavailable("Ollama is not reachable")
+
+    monkeypatch.setattr(generator, "ping_llm", _dead)
+    r = client.get("/health")
+    assert r.status_code == 503
+    assert r.json()["status"] == "degraded"
+    assert "not reachable" in r.json()["checks"]["llm"]
+
+
+def test_security_headers_are_set(client: TestClient):
+    """Baseline browser defences ride on every response, including errors."""
+    h = client.get("/health").headers
+    assert h["X-Content-Type-Options"] == "nosniff"
+    assert h["X-Frame-Options"] == "DENY"
+    assert "frame-ancestors 'none'" in h["Content-Security-Policy"]
 
 
 # ——— CSRF double-submit ———
@@ -147,3 +182,56 @@ def test_token_signed_with_a_different_secret_is_rejected(client: TestClient):
     forged = jwt.encode({"sub": "1"}, "attacker-secret", algorithm="HS256")
     client.cookies.set("access_token", forged)
     assert client.get("/auth/me").status_code == 401
+
+
+# ——— brute-force protection ———
+
+
+def test_repeated_bad_logins_are_eventually_throttled(client: TestClient):
+    """Without a cap, /login is an unlimited password oracle.
+
+    Asserts the wrong password keeps returning 401 up to the budget and then
+    flips to 429 — i.e. guessing is bounded, not merely discouraged.
+    """
+    from backend.ratelimit import auth_limiter
+
+    body = {"email": "nobody@example.com", "password": "wrongpassword123"}
+    for _ in range(auth_limiter.limit):
+        assert client.post("/auth/login", json=body).status_code == 401
+
+    blocked = client.post("/auth/login", json=body)
+    assert blocked.status_code == 429
+    # Tell the caller when to come back rather than just refusing.
+    assert "Retry-After" in blocked.headers
+
+
+def test_throttle_counts_attempts_not_just_failures(client: TestClient):
+    """The budget is charged before the password check, so a valid password
+    cannot be used to reset or dodge the counter."""
+    from backend.ratelimit import auth_limiter
+
+    client.post("/auth/register", json={"email": "bob@example.com", "password": "validpassword123"})
+    for _ in range(auth_limiter.limit):
+        client.post("/auth/login", json={"email": "bob@example.com", "password": "wrongpassword123"})
+
+    good = client.post("/auth/login", json={"email": "bob@example.com", "password": "validpassword123"})
+    assert good.status_code == 429
+
+
+def test_registration_is_throttled(client: TestClient):
+    """Stops automated mass-signup and email enumeration from one source."""
+    from backend.ratelimit import auth_limiter
+
+    for i in range(auth_limiter.limit):
+        client.post("/auth/register", json={"email": f"u{i}@example.com", "password": "validpassword123"})
+    r = client.post("/auth/register", json={"email": "toomany@example.com", "password": "validpassword123"})
+    assert r.status_code == 429
+
+
+def test_password_reset_request_is_throttled(client: TestClient):
+    """Unthrottled, /forgot is a free email cannon aimed at any address."""
+    from backend.ratelimit import auth_limiter
+
+    for _ in range(auth_limiter.limit):
+        client.post("/auth/forgot", json={"email": "victim@example.com"})
+    assert client.post("/auth/forgot", json={"email": "victim@example.com"}).status_code == 429

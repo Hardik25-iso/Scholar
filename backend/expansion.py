@@ -145,12 +145,13 @@ def hypothetical_answer(query: str) -> str:
     hypothetical it used, or that promise quietly stops being true. Temperature
     is 0 to make that as close to reproducible as a local LLM allows.
     """
-    import ollama
-
-    from backend.generator import MODEL
+    # _chat, not ollama.chat: the bare helper has no timeout, so a hung model
+    # would never return and the `except` below could never run — the graceful
+    # degradation that makes expansion safe depends on the call being bounded.
+    from backend.generator import MODEL, _chat
 
     try:
-        response = ollama.chat(
+        response = _chat(
             model=MODEL,
             messages=[{"role": "system", "content": HYDE_PROMPT},
                       {"role": "user", "content": query}],

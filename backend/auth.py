@@ -15,13 +15,14 @@ import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Response, status
+from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, Response, status
 from sqlmodel import Session, select
 
 from backend import account, mailer
 from backend.config import settings
 from backend.db import get_session
 from backend.db_models import PasswordResetToken, RefreshToken, User
+from backend.ratelimit import auth_limiter, client_key
 from backend.models import (
     DeleteAccountRequest, ForgotPasswordRequest, LoginRequest, RegisterRequest,
     ResetPasswordRequest, UserPublic,
@@ -248,7 +249,15 @@ def require_csrf(
 
 
 @router.post("/register", response_model=UserPublic, status_code=status.HTTP_201_CREATED)
-def register(body: RegisterRequest, response: Response, session: Session = Depends(get_session)) -> User:
+def register(
+    body: RegisterRequest,
+    request: Request,
+    response: Response,
+    session: Session = Depends(get_session),
+) -> User:
+    # Same IP budget as login: stops automated mass-account creation, and stops
+    # /register being used to enumerate which emails are already registered.
+    auth_limiter.check(client_key(request))
     if session.exec(select(User).where(User.email == body.email)).first():
         raise HTTPException(status.HTTP_409_CONFLICT, "email already registered")
     user = User(email=body.email, hashed_password=hash_password(body.password))
@@ -268,7 +277,15 @@ def register(body: RegisterRequest, response: Response, session: Session = Depen
 
 
 @router.post("/login", response_model=UserPublic)
-def login(body: LoginRequest, response: Response, session: Session = Depends(get_session)) -> User:
+def login(
+    body: LoginRequest,
+    request: Request,
+    response: Response,
+    session: Session = Depends(get_session),
+) -> User:
+    # Brute-force guard, charged BEFORE the password check so failed attempts
+    # count. Without this, /login is an unlimited password oracle.
+    auth_limiter.check(client_key(request))
     user = session.exec(select(User).where(User.email == body.email)).first()
     # Verify even on unknown email path would be ideal; keep simple but generic msg.
     if user is None or not verify_password(body.password, user.hashed_password):
@@ -376,8 +393,11 @@ def refresh(
 @router.post("/forgot", status_code=status.HTTP_202_ACCEPTED)
 def forgot_password(
     body: ForgotPasswordRequest,
+    request: Request,
     session: Session = Depends(get_session),
 ) -> dict[str, str]:
+    # Unthrottled, this route is a free email cannon pointed at any address.
+    auth_limiter.check(client_key(request))
     """Begin a password reset. Always 202, whether or not the account exists.
 
     Answering differently for a known and an unknown address turns this endpoint
@@ -402,6 +422,7 @@ def forgot_password(
 @router.post("/reset", response_model=UserPublic)
 def reset_password(
     body: ResetPasswordRequest,
+    request: Request,
     response: Response,
     session: Session = Depends(get_session),
 ) -> User:
@@ -411,6 +432,8 @@ def reset_password(
     plaintext never has to be compared against anything stored — a database leak
     yields hashes that cannot be replayed as links.
     """
+    # Throttled so the token itself cannot be brute-forced by guessing.
+    auth_limiter.check(client_key(request))
     record = session.exec(
         select(PasswordResetToken).where(PasswordResetToken.token_hash == hash_token(body.token))
     ).first()

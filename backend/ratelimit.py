@@ -22,7 +22,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException, Request, status
 
 from backend.config import settings
 
@@ -84,3 +84,22 @@ class RateLimiter:
 # one without importing api.py, which imports papers.py — a cycle.
 ask_limiter = RateLimiter(settings.ask_rate_limit_per_hour, "questions")
 upload_limiter = RateLimiter(settings.upload_rate_limit_per_hour, "uploads")
+
+# Brute-force guard on the credential routes. Keyed by client IP, because a
+# login attempt has no authenticated user yet — and keying on the SUBMITTED
+# email would hand an attacker a lockout weapon against any address they know.
+auth_limiter = RateLimiter(settings.auth_rate_limit_per_hour, "sign-in attempts")
+
+
+def client_key(request: Request) -> str:
+    """Rate-limit key for an unauthenticated caller: their IP.
+
+    Behind a reverse proxy every request appears to come from the proxy, so the
+    forwarded client IP is preferred when present. NOTE: X-Forwarded-For is
+    client-controlled and trivially spoofed unless a trusted proxy overwrites
+    it — this is only sound once Scholar is actually deployed behind one.
+    """
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"

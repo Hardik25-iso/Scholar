@@ -1,3 +1,13 @@
+---
+title: Scholar
+emoji: 📖
+colorFrom: gray
+colorTo: red
+sdk: docker
+app_port: 8001
+pinned: false
+---
+
 # Scholar
 
 **Auditable answers over private documents.** Upload contracts, reports and papers; ask questions in

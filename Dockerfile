@@ -90,7 +90,11 @@ ENV DATA_ROOT=/data/workspaces \
 VOLUME /data
 
 # Run as a non-root user. Anything that escapes the app should not own the box.
-RUN useradd --create-home --uid 10001 scholar \
+#
+# UID 1000 specifically: Hugging Face Spaces runs containers as uid 1000 and
+# writes fail if the app's user is anything else. Any other host is indifferent
+# to the number, so 1000 is the portable choice.
+RUN useradd --create-home --uid 1000 scholar \
     && mkdir -p /data \
     && chown -R scholar:scholar /data /app
 USER scholar

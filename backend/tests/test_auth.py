@@ -151,6 +151,25 @@ def test_health_reports_each_dependency(client: TestClient, monkeypatch):
     assert r.json()["status"] == "ok"
 
 
+def test_liveness_stays_green_when_the_model_is_down(client: TestClient, monkeypatch):
+    """The deploy gate must not depend on a third-party API.
+
+    /healthz answers "can this process serve?", /health answers "can it answer
+    questions?". Gating a release on the latter means an outage at the model
+    provider blocks every deploy of ours — so this asserts the two disagree in
+    exactly that situation.
+    """
+    from backend import generator
+
+    def _dead():
+        raise generator.LLMUnavailable("could not reach the model provider")
+
+    monkeypatch.setattr(generator, "ping_llm", _dead)
+
+    assert client.get("/healthz").status_code == 200      # deploy proceeds
+    assert client.get("/health").status_code == 503       # but it is honest
+
+
 def test_health_is_503_when_a_dependency_is_down(client: TestClient, monkeypatch):
     """Down dependency => 503, so a load balancer stops sending traffic here."""
     from backend import generator

@@ -104,7 +104,7 @@ ENV DATA_ROOT=/data/workspaces \
 # to the number, so 1000 is the portable choice.
 RUN useradd --create-home --uid 1000 scholar \
     && mkdir -p /data \
-    && chown -R scholar:scholar /data /app
+    && chown -R scholar:scholar /data /app /opt/models
 
 COPY docker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
@@ -123,7 +123,7 @@ EXPOSE 8001
 # embedder and the LLM, so an unhealthy container is one that genuinely cannot
 # answer a question — not merely one whose process is alive.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
-    CMD curl -fsS "http://127.0.0.1:${PORT:-8001}/health" || exit 1
+    CMD curl -fsS "http://127.0.0.1:${PORT:-8001}/healthz" || exit 1
 
 # Shell form, not exec form, so ${PORT} is expanded at runtime.
 #

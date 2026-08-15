@@ -171,6 +171,29 @@ app.include_router(audit_router)
 app.include_router(workspace_router)
 
 
+@app.get("/healthz")
+def liveness(response: Response) -> dict[str, str]:
+    """LIVENESS: is this process able to serve? Deploy gates use this.
+
+    Deliberately does NOT touch the LLM. /health (below) is the readiness view
+    and reports the model as down when it is — which is right for a load
+    balancer and wrong for a deploy gate: gating a release on a third-party
+    API means any hiccup at their end fails a release of ours, forever. The
+    site, the library, and every non-answer route work fine without a model,
+    so a container that cannot reach Groq is degraded, not dead.
+
+    The database IS checked: it is local, and if it is unreachable this
+    instance is genuinely broken in a way no retry fixes.
+    """
+    try:
+        with Session(engine) as probe:
+            probe.exec(text("SELECT 1"))
+    except Exception as exc:  # noqa: BLE001 — any failure means "do not deploy"
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "error", "database": str(exc)}
+    return {"status": "ok"}
+
+
 @app.get("/health")
 def health(response: Response) -> dict[str, object]:
     """Liveness AND readiness: can this instance actually serve a question?

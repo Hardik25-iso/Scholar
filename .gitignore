@@ -37,3 +37,8 @@ Thumbs.db
 # from publishing a customer's contracts to a public repo.
 backups/
 *.tar.gz
+
+# Personal notes, not project documentation. INTERVIEW-PREP.md is a private
+# study guide — it exists on disk and should stay there, but it is not part of
+# what this repository publishes.
+docs/INTERVIEW-PREP.md

@@ -98,8 +98,11 @@ Return ONLY the rewritten question, nothing else."""
 # resolving a follow-up, and a short prompt keeps this extra call fast.
 _CONDENSE_HISTORY_TURNS = 4
 
-# A standalone question is one sentence; this caps the extra call's cost.
-_CONDENSE_MAX_TOKENS = 80
+# A standalone question is one sentence, but this ceiling has to clear the
+# hidden reasoning some models emit before their first visible token — at 80 a
+# reasoning model returns an empty string and the follow-up silently falls back
+# to the unresolved question. See the note on _HYDE_MAX_TOKENS in expansion.py.
+_CONDENSE_MAX_TOKENS = 400
 
 
 def condense_question(question: str, history: list[ChatTurn]) -> str:

@@ -275,8 +275,8 @@ class Score:
 
 
 def run(k: int, candidates: int, dense_only: bool = False,
-        expansion_mode: str = "none") -> int:
-    from backend import lexical
+        expansion_mode: str = "none", use_mmr: bool = False) -> int:
+    from backend import lexical, mmr
     from backend.reranker import Reranker
     from backend.retriever import Retriever
     from backend.search import shortlist
@@ -316,6 +316,9 @@ def run(k: int, candidates: int, dense_only: bool = False,
         retriever, reranker = Retriever(store), Reranker()
         stage1, stage2 = Score(), Score()
         dense_score, sparse_score = Score(), Score()
+        # Mean pairwise token overlap within each answer's top k. This is the
+        # metric MMR is supposed to move; hit@k may not budge even when it works.
+        overlaps: list[float] = []
         by_kind: dict[str, Score] = {}
         misses: list[Question] = []
 
@@ -331,7 +334,8 @@ def run(k: int, candidates: int, dense_only: bool = False,
             dense = retriever.retrieve(q.question, k=candidates)
             sparse = [] if dense_only else lexical.search(q.question, store, k=candidates)
 
-            top = reranker.rerank(retrieval_query, cands, top_k=k)
+            top = reranker.rerank(retrieval_query, cands, top_k=k, use_mmr=use_mmr)
+            overlaps.append(mmr.mean_pairwise_overlap(top))
 
             # Each retriever scored on its own too, so the fusion has to justify
             # itself against both rather than only against the previous baseline.
@@ -348,6 +352,7 @@ def run(k: int, candidates: int, dense_only: bool = False,
 
     mode = "DENSE ONLY" if dense_only else "HYBRID (dense + lexical, RRF)"
     mode += f"  [expansion: {expansion_mode}]"
+    mode += f"  [mmr: {'on' if use_mmr else 'off'}]"
     print("=" * 72)
     print(f"RETRIEVAL — {mode}")
     print(f"k={k}  candidates={candidates}  n={stage2.total} questions over {n_chunks} chunks")
@@ -361,6 +366,9 @@ def run(k: int, candidates: int, dense_only: bool = False,
           f"   MRR {stage1.mrr:.3f}")
     print(f"  stage 2 (reranked,   top {k})    hit@{k}  {stage2.hit_rate:6.1%}"
           f"   MRR {stage2.mrr:.3f}   hit@1 {stage2.hit1:6.1%}")
+    redundancy = sum(overlaps) / len(overlaps) if overlaps else 0.0
+    print(f"  redundancy (mean pairwise token overlap within the top {k}): {redundancy:.4f}")
+    print("    lower is better — it is slots spent on repeated text rather than new evidence.")
     print()
     print("  by question kind (after reranking):")
     print(f"    {'kind':<12} {'hit@' + str(k):>7} {'MRR':>7} {'of max':>8} {'parts':>6}   n")
@@ -397,6 +405,10 @@ def main() -> int:
                    help=f"stage-1 shortlist depth (default {DEFAULT_CANDIDATES})")
     p.add_argument("--dense-only", action="store_true",
                    help="disable lexical search and fusion — the pre-hybrid baseline")
+    p.add_argument("--mmr", action="store_true", default=settings.mmr_enabled,
+                   help="select the top k by Maximal Marginal Relevance (diversity-aware)")
+    p.add_argument("--no-mmr", dest="mmr", action="store_false",
+                   help="pure relevance ordering — the A/B baseline")
     p.add_argument("--expansion", choices=("none", "prf", "hyde"),
                    default=settings.query_expansion,
                    help="query expansion strategy (defaults to the CONFIGURED one, so the "
@@ -408,7 +420,7 @@ def main() -> int:
         return 0
     if args.check:
         return check_labels(load_dataset()[0])
-    return run(args.k, args.candidates, dense_only=args.dense_only,
+    return run(args.k, args.candidates, dense_only=args.dense_only, use_mmr=args.mmr,
                expansion_mode=args.expansion)
 
 

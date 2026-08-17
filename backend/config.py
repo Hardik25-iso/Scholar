@@ -129,6 +129,21 @@ class Settings(BaseSettings):
     # reproducible — see docs/04-pmf-roadmap.md.
     query_expansion: str = "hyde"
 
+    # Maximal Marginal Relevance: after reranking, prefer passages that are both
+    # relevant AND unlike the ones already chosen.
+    #
+    # Off by default until it is measured on this corpus. The hypothesis is that
+    # the chunker's 50-token overlap puts near-duplicate passages in the top k,
+    # spending slots on repeated text — see backend/mmr.py. Whether that actually
+    # happens here is a question for `python -m backend.eval --mmr`, not for an
+    # opinion: PRF also sounded reasonable and was measured and rejected.
+    mmr_enabled: bool = False
+
+    # Relevance vs diversity. 1.0 is pure relevance and reduces exactly to the
+    # pre-MMR behaviour; lower trades relevance for distinctness. 0.7 is the
+    # usual starting point in the literature.
+    mmr_lambda: float = 0.7
+
     # Whether to OCR scanned PDFs at all. OCR is slow and CPU-hungry, so a small
     # instance may reasonably refuse it — and an explicit switch is the only
     # honest way to express "off". Clearing tessdata_prefix does NOT disable it:

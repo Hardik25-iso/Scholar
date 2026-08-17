@@ -124,8 +124,20 @@ def expansion_terms(
 
 
 # A hypothetical answer only needs to be a sentence or two — it is embedded for
-# retrieval, never shown, so more tokens buy nothing but latency and cost.
-_HYDE_MAX_TOKENS = 60
+# retrieval, never shown.
+#
+# SO WHY 400 AND NOT 60? Because max_tokens is a CEILING, not a target: a model
+# that finishes in 20 tokens is unaffected by a high one. But a *reasoning* model
+# (openai/gpt-oss-*, and increasingly others) spends tokens on hidden reasoning
+# that count against this budget before emitting a single visible character. At
+# 60 the entire budget went to reasoning and the API returned an empty string —
+# so expansion silently degraded to "none" on every question, and because the
+# degradation is graceful nothing failed and nothing was logged. Measured on
+# gpt-oss-120b: 60 -> 0 characters, 150 -> truncated, 400 -> complete.
+#
+# The lesson is about the provider seam, not this constant: a budget tuned
+# against one model family is an assumption that travels badly.
+_HYDE_MAX_TOKENS = 400
 
 HYDE_PROMPT ="""Write one short sentence that could plausibly appear in a \
 document as the answer to the question. Use the formal vocabulary such a \

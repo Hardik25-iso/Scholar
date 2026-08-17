@@ -240,6 +240,7 @@ result you can reproduce is worth more than a good idea you never tested.
 | **`page.get_text(sort=True)`** for reading order | **Rejected on measurement.** It *destroyed* two-column reading order on the test corpus: 5/5 labelled spans preserved without it, 0/5 with it. |
 | **PyMuPDF `find_tables()`** | Unusable on the real documents tested; a hand-rolled column serialiser did better. |
 | **"The reranker is the bottleneck"** | **Wrong.** It came from reading an aggregate. Per question the reranker promotes 9, demotes 4, loses 2 — both losses are vocabulary cases where the gold passage genuinely looks nothing like the question. |
+| **MMR (diversity-aware selection)** | **Rejected.** It works and still loses: redundancy in the top 5 falls monotonically with λ (0.108 → 0.075) exactly as promised, but hit@5 falls with it (94.1% → 86.3%, misses 3 → 7). The premise was wrong — when chunks overlap by 50 tokens and the answer sits in the overlap, both chunks really do contain it, so the passage MMR drops as "redundant" is often the one holding the evidence. Selectable via `MMR_ENABLED`. |
 | **An agentic research layer** | **Built nothing.** Measurement gated it: within-document multi-hop already scored 100%, and the only 0% class (`vocabulary`) is not one an agent fixes. Query expansion closed that gap instead. |
 
 One labelled question turned out not to be multi-hop at all — both required spans lived in the same

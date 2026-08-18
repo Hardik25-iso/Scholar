@@ -184,14 +184,21 @@ def liveness(response: Response) -> dict[str, str]:
 
     The database IS checked: it is local, and if it is unreachable this
     instance is genuinely broken in a way no retry fixes.
+
+    Also reports the commit this process is running. Confirming a deploy used to
+    mean opening the hosting dashboard, because nothing the app served could
+    distinguish the new build from the old one — and "the app is healthy" is not
+    the same claim as "the app is healthy AND it is the code I just pushed".
+    Reported on failure too: knowing WHICH build is broken is most of the fix.
     """
+    build = settings.build_sha
     try:
         with Session(engine) as probe:
             probe.exec(text("SELECT 1"))
     except Exception as exc:  # noqa: BLE001 — any failure means "do not deploy"
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-        return {"status": "error", "database": str(exc)}
-    return {"status": "ok"}
+        return {"status": "error", "build": build, "database": str(exc)}
+    return {"status": "ok", "build": build}
 
 
 @app.get("/health")

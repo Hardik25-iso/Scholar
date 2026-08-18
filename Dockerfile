@@ -117,6 +117,21 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # execs the app as `scholar`. The app process itself never runs as root.
 ENTRYPOINT ["docker-entrypoint.sh"]
 
+# Which commit this image was built from, reported by /healthz so a deploy can
+# be confirmed with one request rather than a trip to the hosting dashboard.
+#
+# DELIBERATELY THE LAST LAYER THAT VARIES. A build arg invalidates its own layer
+# and every layer after it, so declaring this near the top would make each new
+# commit rebuild the model-baking step — turning a ~1 minute cached deploy back
+# into the full ~10 minute download. Everything expensive is already above.
+#
+# Empty by default. On Railway this stays empty and the app falls back to
+# RAILWAY_GIT_COMMIT_SHA, which the platform injects at runtime for free; pass
+# it explicitly anywhere else:
+#   docker build --build-arg GIT_SHA=$(git rev-parse --short HEAD) .
+ARG GIT_SHA=""
+ENV BUILD_SHA=$GIT_SHA
+
 EXPOSE 8001
 
 # The readiness check the app already exposes: it verifies the database, the

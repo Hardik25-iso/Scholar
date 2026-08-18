@@ -8,6 +8,8 @@ of failing at startup — including the legacy ANTHROPIC_API_KEY from an earlier
 experiment, which Scholar does not read. (It should still be rotated: it was
 exposed in this project's history. Nothing here depends on it.)
 """
+import os
+
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -196,6 +198,26 @@ class Settings(BaseSettings):
     # development and wrong the first time this is deployed behind a real
     # domain — the CORS origin and the public URL are not always the same thing.
     public_app_url: str = ""
+
+    # Which commit this process is running, surfaced on /healthz so a deploy can
+    # be verified with one request instead of a trip to the hosting dashboard.
+    #
+    # Resolved from BUILD_SHA, falling back to RAILWAY_GIT_COMMIT_SHA, which the
+    # platform injects for free — the deployed instance therefore reports its
+    # commit with no build configuration at all. A local `docker build` passes
+    # --build-arg GIT_SHA instead (see the Dockerfile), so this is not tied to
+    # one host.
+    #
+    # Defaults to "unknown" rather than "", because an empty string renders as a
+    # missing field and reads like "this build has no commit" — when the honest
+    # meaning is "nobody told me". Truncated to 7 characters: enough to identify
+    # a commit by eye, and it is what `git log --oneline` prints.
+    build_sha: str = ""
+
+    @field_validator("build_sha", mode="after")
+    @classmethod
+    def _resolve_build_sha(cls, v: str) -> str:
+        return (v or os.getenv("RAILWAY_GIT_COMMIT_SHA", "")).strip()[:7] or "unknown"
 
     @field_validator("*", mode="before")
     @classmethod

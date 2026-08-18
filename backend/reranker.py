@@ -15,7 +15,6 @@ MS MARCO query/passage relevance. Ships inside sentence-transformers.
 from sentence_transformers import CrossEncoder
 
 from backend import mmr
-from backend.config import settings
 from backend.models import Citation
 
 RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
@@ -63,6 +62,13 @@ class Reranker:
         # re-orders the cross-encoder's judgement to avoid spending slots on
         # near-duplicate passages. Selecting from `ranked` (not `candidates`)
         # keeps the two paths identical when MMR is off.
+        # Settings are read HERE, not at import time. The Docker build bakes the
+        # models in by importing RERANKER_MODEL from this module, and a build has
+        # no environment — a module-level `settings` would construct Settings(),
+        # fail on the missing SECRET_KEY, and break the image build. A module that
+        # names a model should be importable without a configured deployment.
+        from backend.config import settings
+
         if settings.mmr_enabled if use_mmr is None else use_mmr:
             return mmr.select(ranked, k=top_k, lam=settings.mmr_lambda)
         return ranked[:top_k]

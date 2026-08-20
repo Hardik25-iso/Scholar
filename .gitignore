@@ -41,4 +41,4 @@ backups/
 # Personal notes, not project documentation. INTERVIEW-PREP.md is a private
 # study guide — it exists on disk and should stay there, but it is not part of
 # what this repository publishes.
-docs/INTERVIEW-PREP.md
+docs/INTERVIEW-PREP*.md

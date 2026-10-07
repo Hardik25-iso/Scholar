@@ -275,7 +275,8 @@ class Score:
 
 
 def run(k: int, candidates: int, dense_only: bool = False,
-        expansion_mode: str = "none", use_mmr: bool = False) -> int:
+        expansion_mode: str = "none", use_mmr: bool = False,
+        json_out: Path | None = None) -> int:
     from backend import lexical, mmr
     from backend.reranker import Reranker
     from backend.retriever import Retriever
@@ -321,6 +322,10 @@ def run(k: int, candidates: int, dense_only: bool = False,
         overlaps: list[float] = []
         by_kind: dict[str, Score] = {}
         misses: list[Question] = []
+        # Per-question first-hit rank, so two runs can be compared question by
+        # question. A summary hit@k can hold steady while one question flips
+        # to a miss and another flips to a hit; the diff is what shows that.
+        ranks: dict[str, int | None] = {}
 
         for q in runnable:
             # Deliberately the SAME function /ask uses. Reimplementing the
@@ -347,6 +352,7 @@ def run(k: int, candidates: int, dense_only: bool = False,
             rank = first_hit_rank(top, q)
             stage2.add(rank, parts)
             by_kind.setdefault(q.kind, Score()).add(rank, parts)
+            ranks[q.id] = rank
             if rank is None:
                 misses.append(q)
 
@@ -390,6 +396,15 @@ def run(k: int, candidates: int, dense_only: bool = False,
         for q in misses:
             print(f"    [{q.kind}] {q.id}  {q.question}")
 
+    if json_out is not None:
+        json_out.write_text(json.dumps({
+            "k": k, "candidates": candidates, "expansion": expansion_mode,
+            "dense_only": dense_only, "mmr": use_mmr, "n_chunks": n_chunks,
+            "hit_at_k": stage2.hit_rate, "mrr": stage2.mrr, "hit_at_1": stage2.hit1,
+            "stage1_hit": stage1.hit_rate, "ranks": ranks,
+        }, indent=2), encoding="utf-8")
+        print(f"\n  per-question results written to {json_out}")
+
     print(f"\n  refusal probes: {len(refusals)} defined, not run "
           f"(needs a live LLM — see the module docstring)")
     print("=" * 68)
@@ -413,6 +428,9 @@ def main() -> int:
                    default=settings.query_expansion,
                    help="query expansion strategy (defaults to the CONFIGURED one, so the "
                         "eval measures what ships)")
+    p.add_argument("--json-out", type=Path, default=None,
+                   help="also write per-question ranks + summary metrics as JSON, "
+                        "so two runs can be diffed question by question")
     args = p.parse_args()
 
     if args.build_corpus:
@@ -421,7 +439,7 @@ def main() -> int:
     if args.check:
         return check_labels(load_dataset()[0])
     return run(args.k, args.candidates, dense_only=args.dense_only, use_mmr=args.mmr,
-               expansion_mode=args.expansion)
+               expansion_mode=args.expansion, json_out=args.json_out)
 
 
 if __name__ == "__main__":

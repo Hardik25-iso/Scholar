@@ -7,7 +7,7 @@ max_seq_length of 384 word-pieces (the 512 figure is the architectural max,
 but the model was fine-tuned and defaults to 384). Word counts are a proxy
 that silently drifts over that limit; counting tokens guarantees a fit.
 
-We use the FAST tokenizer's offset mapping to find, for each token window, the
+We use the tokenizer's offset mapping to find, for each token window, the
 character span it covers in the original page text — then slice the VERBATIM
 original text out of those offsets. This preserves real casing and spacing for
 citations (e.g. "Ashish Vaswani", "avaswani@google.com") instead of the
@@ -22,10 +22,10 @@ Overlap = 50 tokens (~13%) so answers aren't split at chunk boundaries.
 """
 from functools import lru_cache
 
-from transformers import AutoTokenizer
+from tokenizers import Tokenizer
 
-from backend.embedder import MODEL_NAME
 from backend.models import UNIT_PAGE, Chunk
+from backend.onnx_runtime import EMBEDDER_DIR, tokenizer
 
 CHUNK_TOKENS = 380   # content word-pieces per chunk (excludes special tokens)
 OVERLAP = 50         # word-pieces of overlap between consecutive chunks
@@ -34,17 +34,17 @@ MAX_SEQ_LENGTH = 384  # mpnet default; chunks must stay at or under this
 
 
 @lru_cache(maxsize=1)
-def _tokenizer() -> AutoTokenizer:
-    # use_fast=True is required for return_offsets_mapping; assert it so a future
-    # environment without the fast tokenizer fails loudly instead of silently.
-    tok = AutoTokenizer.from_pretrained(MODEL_NAME, use_fast=True)
-    assert tok.is_fast, "offset mapping requires the fast tokenizer"
-    return tok
+def _tokenizer() -> Tokenizer:
+    # The embedding model's own tokenizer.json — the same vocabulary and
+    # normalisation the model was trained with — with truncation and padding
+    # OFF. Its shipped defaults cap every encoding at 128 tokens, which would
+    # make every page look like one short chunk; see onnx_runtime.tokenizer().
+    return tokenizer(EMBEDDER_DIR)
 
 
 def count_tokens(text: str) -> int:
     """Real sequence length the model sees for `text`, incl. special tokens."""
-    return len(_tokenizer().encode(text, add_special_tokens=True))
+    return len(_tokenizer().encode(text, add_special_tokens=True).ids)
 
 
 def _char_span(offsets: list[tuple[int, int]]) -> tuple[int, int] | None:
@@ -70,19 +70,12 @@ def chunk_pages(pages: list[str], paper_id: str, unit: str = UNIT_PAGE) -> list[
     chunks: list[Chunk] = []
 
     for page_num, page_text in enumerate(pages):
-        enc = tok(
-            page_text,
-            add_special_tokens=False,         # we measure content tokens only
-            return_offsets_mapping=True,
-            # A whole page is routinely 600-1200 tokens, which trips the
-            # tokenizer's "longer than the maximum sequence length" warning.
-            # That warning is a FALSE alarm here: we never feed the page to the
-            # model, we only window its offsets below. Silence it so a genuine
-            # length problem elsewhere isn't lost in the noise.
-            verbose=False,
-        )
-        ids = enc["input_ids"]
-        offsets = enc["offset_mapping"]
+        # Content tokens only — the special tokens are added at encode time.
+        # A whole page is routinely 600-1200 tokens; that is fine, because the
+        # page is never fed to the model, only windowed by its offsets below.
+        enc = tok.encode(page_text, add_special_tokens=False)
+        ids = enc.ids
+        offsets = enc.offsets
         if not ids:
             continue
 

@@ -182,15 +182,14 @@ def test_question_plus_chunk_fits_the_cross_encoder():
     automatically safe there — anything over 512 has its tail silently dropped
     before scoring. Measured today: the worst pair is ~399. This test fails if a
     future chunking change (e.g. Phase 1's serialized tables) breaks that."""
-    from transformers import AutoTokenizer
+    from backend.onnx_runtime import RERANKER_DIR, tokenizer
+    from backend.reranker import MAX_LENGTH
 
-    from backend.reranker import RERANKER_MODEL
-
-    tok = AutoTokenizer.from_pretrained(RERANKER_MODEL)
+    tok = tokenizer(RERANKER_DIR)  # truncation OFF, so the true length is measured
     question = "What is the difference between the RAG-Sequence and RAG-Token models?"
 
-    worst = max(len(tok.encode(question, c.text)) for c in chunk_pages([_long_page()], "paper"))
-    assert worst <= tok.model_max_length, (
+    worst = max(len(tok.encode(question, c.text).ids) for c in chunk_pages([_long_page()], "paper"))
+    assert worst <= MAX_LENGTH, (
         f"(question, chunk) pairs reach {worst} tokens, over the reranker's "
-        f"{tok.model_max_length}-token limit — passage tails are being dropped"
+        f"{MAX_LENGTH}-token limit — passage tails are being dropped"
     )

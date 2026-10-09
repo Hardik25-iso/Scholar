@@ -2,8 +2,8 @@ pymupdf==1.26.6
 python-docx>=1.1,<2.0
 python-pptx>=1.0,<2.0
 openpyxl>=3.1,<4.0
-sentence-transformers==3.0.1
-transformers>=4.40,<5.0
+onnxruntime>=1.30,<2.0
+tokenizers>=0.23,<0.24
 faiss-cpu==1.8.0
 numpy==1.26.4
 pydantic>=2.7,<3.0

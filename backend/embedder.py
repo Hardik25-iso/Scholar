@@ -1,37 +1,89 @@
-"""Embedding with sentence-transformers all-mpnet-base-v2.
+"""Embedding with all-mpnet-base-v2, on ONNX Runtime.
 
 Embeddings are L2-normalised so that inner product == cosine similarity,
 which is what IndexFlatIP in FAISS computes.
+
+This reproduces sentence-transformers' pipeline for this model step by step —
+strip, tokenize (truncate at 384, pad to the batch's longest), transformer,
+mean-pool over real tokens, L2-normalise — so the vectors match the torch
+implementation it replaced. That match is a test, not a hope: see
+backend/tests/test_onnx_parity.py, which holds this module to embeddings
+captured from the torch pipeline.
 """
+from functools import lru_cache
+
 import numpy as np
-from sentence_transformers import SentenceTransformer
+from tokenizers import Tokenizer
+
+from backend.onnx_runtime import EMBEDDER_DIR, precision, session, tokenizer
 
 MODEL_NAME = "sentence-transformers/all-mpnet-base-v2"
+EMBEDDING_DIM = 768
 
-_model: SentenceTransformer | None = None
+# The model's fine-tuned max_seq_length (512 is the architectural ceiling; 384
+# is what sentence-transformers uses for this model). Anything longer is cut,
+# which is why the chunker sizes chunks to fit — see chunker.py.
+MAX_SEQ_LENGTH = 384
+
+# Small on purpose. Attention memory grows with batch x heads x seq^2, so a batch
+# of 32 full-length chunks costs hundreds of MB of activations for a few percent
+# of throughput. On a 512 MB instance memory is the constraint, not speed.
+DEFAULT_BATCH_SIZE = 8
 
 
-def _get_model() -> SentenceTransformer:
-    global _model
-    if _model is None:
-        _model = SentenceTransformer(MODEL_NAME)
-    return _model
+@lru_cache(maxsize=1)
+def _encoder() -> Tokenizer:
+    tok = tokenizer(EMBEDDER_DIR)
+    tok.enable_truncation(MAX_SEQ_LENGTH, strategy="longest_first")
+    # Pad to the longest in each batch (no fixed length), with the model's own
+    # pad token. A fixed 384 would multiply the work for a short question.
+    tok.enable_padding(pad_id=tok.token_to_id("<pad>"), pad_token="<pad>")
+    return tok
+
+
+def _batch_size() -> int:
+    from backend.config import settings
+
+    return settings.embed_batch_size or DEFAULT_BATCH_SIZE
 
 
 def embed(
-    texts: list[str], batch_size: int = 32, progress: bool = True
+    texts: list[str], batch_size: int | None = None, progress: bool = True
 ) -> np.ndarray:
     """Return a float32 array of shape (len(texts), 768), L2-normalised.
 
-    `progress` shows a progress bar — useful when embedding a whole paper at
-    ingest time, but noisy for a single query, so the retriever turns it off.
+    `progress` is accepted for interface compatibility and ignored: on a
+    server, a progress bar is log noise, and indexing reports its outcome
+    through the IndexJob row instead.
     """
-    model = _get_model()
-    vectors = model.encode(
-        texts,
-        batch_size=batch_size,
-        show_progress_bar=progress,
-        convert_to_numpy=True,
-        normalize_embeddings=True,   # cosine via inner product
-    )
-    return vectors.astype(np.float32)
+    del progress
+    out = np.empty((len(texts), EMBEDDING_DIM), dtype=np.float32)
+    if not texts:
+        return out
+
+    sess = session(EMBEDDER_DIR, precision())
+    wanted = {i.name for i in sess.get_inputs()}
+    tok = _encoder()
+    size = batch_size or _batch_size()
+
+    # Batch texts of similar length together. Padding to the longest member is
+    # pure wasted compute, and on a 0.1-CPU slice compute is what a long
+    # document's indexing time is made of. Results are written back by index,
+    # so the caller's order is unaffected.
+    order = sorted(range(len(texts)), key=lambda i: len(texts[i]))
+    for start in range(0, len(order), size):
+        idx = order[start:start + size]
+        encodings = tok.encode_batch([str(texts[i]).strip() for i in idx])
+        ids = np.array([e.ids for e in encodings], dtype=np.int64)
+        mask = np.array([e.attention_mask for e in encodings], dtype=np.int64)
+        feed = {"input_ids": ids, "attention_mask": mask}
+        if "token_type_ids" in wanted:
+            feed["token_type_ids"] = np.zeros_like(ids)
+        hidden = sess.run(None, {k: v for k, v in feed.items() if k in wanted})[0]
+
+        # Mean over REAL tokens only — padding must not dilute the average.
+        weights = mask[..., None].astype(np.float32)
+        pooled = (hidden * weights).sum(axis=1) / np.clip(weights.sum(axis=1), 1e-9, None)
+        norms = np.linalg.norm(pooled, axis=1, keepdims=True)
+        out[idx] = pooled / np.clip(norms, 1e-12, None)
+    return out

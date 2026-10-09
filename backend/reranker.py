@@ -9,24 +9,60 @@ every question token can attend to every chunk token. That joint view judges tru
 relevance far better — but it costs one full model pass PER candidate, so we only
 ever run it on the handful the bi-encoder already shortlisted, not the whole index.
 
-Model: cross-encoder/ms-marco-MiniLM-L-6-v2 — small (~80MB), CPU-fast, trained on
-MS MARCO query/passage relevance. Ships inside sentence-transformers.
+Model: cross-encoder/ms-marco-MiniLM-L-6-v2 — small, CPU-fast, trained on
+MS MARCO query/passage relevance. Run on ONNX Runtime from the model authors'
+own export; the score is the raw logit, exactly as sentence-transformers
+returned it (the model's config sets its activation to Identity, not sigmoid).
 """
-from sentence_transformers import CrossEncoder
+from functools import lru_cache
+
+import numpy as np
+from tokenizers import Tokenizer
 
 from backend import mmr
 from backend.models import Citation
+from backend.onnx_runtime import RERANKER_DIR, precision, session, tokenizer
 
 RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
-_model: CrossEncoder | None = None
+# The model's position-embedding limit. A (question, passage) pair longer than
+# this has its LONGER side trimmed first ("longest_first"), as before.
+MAX_LENGTH = 512
+
+# Pairs scored per model call. Attention memory grows with batch x seq^2, and a
+# shortlist is ~20 pairs of up to ~400 tokens — scoring them all at once is a
+# memory spike for no gain on a single-core slice.
+BATCH_SIZE = 8
 
 
-def _get_model() -> CrossEncoder:
-    global _model
-    if _model is None:
-        _model = CrossEncoder(RERANKER_MODEL)
-    return _model
+@lru_cache(maxsize=1)
+def _encoder() -> Tokenizer:
+    tok = tokenizer(RERANKER_DIR)
+    tok.enable_truncation(MAX_LENGTH, strategy="longest_first")
+    tok.enable_padding(pad_id=tok.token_to_id("[PAD]"), pad_token="[PAD]")
+    return tok
+
+
+def score_pairs(pairs: list[tuple[str, str]]) -> np.ndarray:
+    """Raw relevance logits for (question, passage) pairs. Higher = more relevant."""
+    if not pairs:
+        return np.empty(0, dtype=np.float32)
+    sess = session(RERANKER_DIR, precision())
+    wanted = {i.name for i in sess.get_inputs()}
+    tok = _encoder()
+
+    scores: list[np.ndarray] = []
+    for start in range(0, len(pairs), BATCH_SIZE):
+        batch = [(str(q).strip(), str(p).strip()) for q, p in pairs[start:start + BATCH_SIZE]]
+        encodings = tok.encode_batch(batch)
+        feed = {
+            "input_ids": np.array([e.ids for e in encodings], dtype=np.int64),
+            "attention_mask": np.array([e.attention_mask for e in encodings], dtype=np.int64),
+            "token_type_ids": np.array([e.type_ids for e in encodings], dtype=np.int64),
+        }
+        logits = sess.run(None, {k: v for k, v in feed.items() if k in wanted})[0]
+        scores.append(logits[:, 0].astype(np.float32))
+    return np.concatenate(scores)
 
 
 class Reranker:
@@ -48,8 +84,7 @@ class Reranker:
             return []
 
         # Score every (question, passage) pair jointly. Higher = more relevant.
-        pairs = [(question, c.text) for c in candidates]
-        scores = _get_model().predict(pairs)
+        scores = score_pairs([(question, c.text) for c in candidates])
 
         # Attach the stage-2 score to each candidate (keeps the stage-1 cosine too).
         for citation, score in zip(candidates, scores):
@@ -62,11 +97,11 @@ class Reranker:
         # re-orders the cross-encoder's judgement to avoid spending slots on
         # near-duplicate passages. Selecting from `ranked` (not `candidates`)
         # keeps the two paths identical when MMR is off.
-        # Settings are read HERE, not at import time. The Docker build bakes the
-        # models in by importing RERANKER_MODEL from this module, and a build has
-        # no environment — a module-level `settings` would construct Settings(),
-        # fail on the missing SECRET_KEY, and break the image build. A module that
-        # names a model should be importable without a configured deployment.
+        # Settings are read HERE, not at import time: a module that names a
+        # model should be importable without a configured deployment — a
+        # module-level `settings` would construct Settings() and fail on a
+        # missing SECRET_KEY wherever there is no environment (an image build,
+        # a one-off script).
         from backend.config import settings
 
         if settings.mmr_enabled if use_mmr is None else use_mmr:

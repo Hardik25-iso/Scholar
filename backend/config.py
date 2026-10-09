@@ -31,6 +31,55 @@ class Settings(BaseSettings):
     # user's library. Point this at a mounted volume before serving anyone.
     data_root: str = ""
 
+    # Where libraries are stored. "local" keeps them under DATA_ROOT (development,
+    # tests, and any host with a real disk). "supabase" keeps them in a Supabase
+    # Storage bucket, for hosts whose filesystem is wiped on every restart —
+    # Render's free tier is one. Either way, which version of a workspace's
+    # index is CURRENT is recorded in the database, never inferred from files.
+    storage_backend: str = "local"  # "local" | "supabase"
+    supabase_url: str = ""
+    # The service-role key: the server reads and writes a PRIVATE bucket on the
+    # user's behalf, after doing its own authorisation. Never sent to a browser.
+    supabase_service_key: str = ""
+    supabase_bucket: str = "scholar"
+
+    # Local working copies of indexes and documents. Disposable by design: every
+    # file here can be re-fetched from storage, so an ephemeral disk is fine.
+    # Empty means <system temp>/scholar-cache.
+    cache_dir: str = ""
+
+    # ——— models ———
+    #
+    # The ONNX files from scripts/fetch_models.py. Empty means the repo-local
+    # models/ directory; the Docker image sets /opt/models.
+    models_dir: str = ""
+    # "int8" (default) or "fp32". fp32 mpnet alone is 436 MB of weights, so on a
+    # 512 MB instance int8 is the only choice; fp32 is for parity tests and eval.
+    model_precision: str = "int8"
+    # Texts per embedding call. Activation memory grows with this, so it is the
+    # first knob to turn down if indexing a large document runs out of memory.
+    embed_batch_size: int = 8
+
+    # ——— limits that keep one document within the instance's budget ———
+    #
+    # Each bounds a different resource: upload size bounds what is held while
+    # receiving, pages bound parse time and memory, chunks bound embedding time
+    # — the one that decides whether indexing finishes before an idle server
+    # is put to sleep. Measured, not guessed: see docs/deploy-measurements/.
+    max_upload_mb: int = 20
+    max_pages: int = 0           # 0 = unlimited (local default)
+    max_chunks_per_doc: int = 0  # 0 = unlimited (local default)
+
+    # Workspaces whose index is kept loaded in memory. Each holds a FAISS index
+    # plus its chunk text, so on a small instance this is a memory setting.
+    retriever_cache_size: int = 8
+
+    # With no queue (REDIS_URL empty), index uploads on a background thread
+    # instead of inside the request, so the upload returns at once and the
+    # browser polls the job. One job at a time either way: a second concurrent
+    # indexing run would double peak memory for no gain on one CPU.
+    index_in_background: bool = False
+
     # The browser origin allowed to call this API (the Vite dev server).
     frontend_origin: str = "http://localhost:5173"
 
@@ -202,9 +251,9 @@ class Settings(BaseSettings):
     # Which commit this process is running, surfaced on /healthz so a deploy can
     # be verified with one request instead of a trip to the hosting dashboard.
     #
-    # Resolved from BUILD_SHA, falling back to RAILWAY_GIT_COMMIT_SHA, which the
-    # platform injects for free — the deployed instance therefore reports its
-    # commit with no build configuration at all. A local `docker build` passes
+    # Resolved from BUILD_SHA, falling back to the commit the hosting platform
+    # injects for free (RAILWAY_GIT_COMMIT_SHA, Render's RENDER_GIT_COMMIT) — the
+    # deployed instance therefore reports its commit with no build configuration. A local `docker build` passes
     # --build-arg GIT_SHA instead (see the Dockerfile), so this is not tied to
     # one host.
     #
@@ -217,7 +266,8 @@ class Settings(BaseSettings):
     @field_validator("build_sha", mode="after")
     @classmethod
     def _resolve_build_sha(cls, v: str) -> str:
-        return (v or os.getenv("RAILWAY_GIT_COMMIT_SHA", "")).strip()[:7] or "unknown"
+        injected = os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("RENDER_GIT_COMMIT") or ""
+        return (v or injected).strip()[:7] or "unknown"
 
     @field_validator("*", mode="before")
     @classmethod

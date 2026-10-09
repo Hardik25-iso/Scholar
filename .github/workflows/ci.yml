@@ -30,13 +30,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r requirements-dev.txt
 
-      # The embedding and reranking models are ~500MB and are downloaded on first
-      # use. Cached on the requirements hash so a normal run never re-downloads.
-      - name: Cache Hugging Face models
+      # The ONNX models (int8, ~135 MB) are pinned and checksummed by
+      # scripts/fetch_models.py; cached on that file's hash, so the cache is
+      # invalidated exactly when a pin changes. Even the fast tier needs the
+      # tokenizers, so this runs before any tests.
+      - name: Cache ONNX models
         uses: actions/cache@v4
         with:
-          path: ~/.cache/huggingface
-          key: hf-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+          path: models
+          key: onnx-${{ hashFiles('scripts/fetch_models.py') }}
+
+      - name: Fetch ONNX models
+        run: python scripts/fetch_models.py models --precision int8
 
       # Split so a plain logic break is reported in seconds, without waiting on
       # the model-loading tier — but both tiers must pass.

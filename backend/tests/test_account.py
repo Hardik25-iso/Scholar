@@ -12,10 +12,9 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
-from backend import library
 from backend.db import engine
 from backend.db_models import AnswerLog, Membership, Paper, RefreshToken, User, Workspace
-from backend.tests.conftest import csrf, workspace_id
+from backend.tests.conftest import csrf, index_dir, papers_dir, workspace_id
 
 GOOD = {"email": "alice@example.com", "password": "validpassword123"}
 OTHER = {"email": "mallory@example.com", "password": "validpassword123"}
@@ -122,13 +121,13 @@ def test_deleting_takes_the_files_off_disk(alice: TestClient, text_pdf: bytes):
     """The claim is that the documents are gone, not that the rows are."""
     ws = workspace_id(alice)
     _upload(alice, text_pdf, "contract.pdf")
-    papers_dir = library.workspace_papers_dir(ws)
-    assert list(papers_dir.glob("*")), "nothing was stored, so this proves nothing"
+    stored = papers_dir(ws)
+    assert list(stored.glob("*")), "nothing was stored, so this proves nothing"
 
     alice.post("/auth/delete", json={"password": GOOD["password"]}, headers=csrf(alice))
 
-    assert not list(papers_dir.glob("*")) if papers_dir.exists() else True
-    assert library.current_index_dir(ws) is None
+    assert not list(stored.glob("*")) if stored.exists() else True
+    assert index_dir(ws) is None
     with Session(engine) as session:
         assert session.exec(select(Paper)).all() == []
         assert session.exec(select(Workspace)).all() == []

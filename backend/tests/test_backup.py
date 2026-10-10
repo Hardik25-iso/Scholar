@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from backend import backup, library
 from backend.backup import BackupError
-from backend.tests.conftest import csrf, workspace_id
+from backend.tests.conftest import csrf
 
 from backend.tests.conftest import requires_sqlite
 

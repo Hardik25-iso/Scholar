@@ -9,6 +9,7 @@ experiment, which Scholar does not read. (It should still be rotated: it was
 exposed in this project's history. Nothing here depends on it.)
 """
 import os
+from typing import Literal
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -36,7 +37,9 @@ class Settings(BaseSettings):
     # Storage bucket, for hosts whose filesystem is wiped on every restart —
     # Render's free tier is one. Either way, which version of a workspace's
     # index is CURRENT is recorded in the database, never inferred from files.
-    storage_backend: str = "local"  # "local" | "supabase"
+    # A Literal, so a typo ("supabse") fails at startup instead of silently
+    # storing everything on a disk that is wiped on the next restart.
+    storage_backend: Literal["local", "supabase"] = "local"
     supabase_url: str = ""
     # The service-role key: the server reads and writes a PRIVATE bucket on the
     # user's behalf, after doing its own authorisation. Never sent to a browser.
@@ -55,7 +58,7 @@ class Settings(BaseSettings):
     models_dir: str = ""
     # "int8" (default) or "fp32". fp32 mpnet alone is 436 MB of weights, so on a
     # 512 MB instance int8 is the only choice; fp32 is for parity tests and eval.
-    model_precision: str = "int8"
+    model_precision: Literal["int8", "fp32"] = "int8"
     # Texts per embedding call. 1 is fastest AND lightest on a single thread
     # (measured: see embedder.py); raise it only on a machine with cores to
     # spare, and expect activation memory to grow with it.

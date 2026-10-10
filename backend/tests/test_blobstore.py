@@ -200,5 +200,5 @@ def test_publish_read_and_delete_over_supabase(remote, tmp_path):
 
     library.delete_paper_data(ws, "alpha")
     library.delete_paper_data(ws, "beta")
-    assert library.current_version(ws) is None
+    assert library.current_index(ws) is None
     assert not [k for k in remote.objects if k.startswith(f"{ws}/")]

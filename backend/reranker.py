@@ -21,7 +21,7 @@ from tokenizers import Tokenizer
 
 from backend import mmr
 from backend.models import Citation
-from backend.onnx_runtime import RERANKER_DIR, precision, session, tokenizer
+from backend.onnx_runtime import RERANKER_DIR, session, tokenizer
 
 RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
@@ -31,7 +31,7 @@ MAX_LENGTH = 512
 
 # Pairs scored per model call. Measured in the image on one thread: batch 1 =
 # 140 ms/pair at +25 MB peak; batch 8 = 209 ms/pair at +236 MB. One at a time
-# is both faster and lighter on a single core — see embedder.DEFAULT_BATCH_SIZE.
+# is both faster and lighter on a single core — see the note in embedder.embed.
 BATCH_SIZE = 1
 
 
@@ -50,20 +50,20 @@ def score_pairs(pairs: list[tuple[str, str]], max_length: int = MAX_LENGTH) -> n
     slow CPU, since a pass costs roughly in proportion to its length."""
     if not pairs:
         return np.empty(0, dtype=np.float32)
-    sess = session(RERANKER_DIR, precision())
-    wanted = {i.name for i in sess.get_inputs()}
+    sess = session(RERANKER_DIR)
     tok = _encoder(max_length)
 
     scores: list[np.ndarray] = []
     for start in range(0, len(pairs), BATCH_SIZE):
-        batch = [(str(q).strip(), str(p).strip()) for q, p in pairs[start:start + BATCH_SIZE]]
+        # Stripped, as sentence-transformers' CrossEncoder does.
+        batch = [(q.strip(), p.strip()) for q, p in pairs[start:start + BATCH_SIZE]]
         encodings = tok.encode_batch(batch)
         feed = {
             "input_ids": np.array([e.ids for e in encodings], dtype=np.int64),
             "attention_mask": np.array([e.attention_mask for e in encodings], dtype=np.int64),
             "token_type_ids": np.array([e.type_ids for e in encodings], dtype=np.int64),
         }
-        logits = sess.run(None, {k: v for k, v in feed.items() if k in wanted})[0]
+        logits = sess.run(None, feed)[0]
         scores.append(logits[:, 0].astype(np.float32))
     return np.concatenate(scores)
 

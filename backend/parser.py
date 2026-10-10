@@ -369,15 +369,6 @@ class DocumentTooLarge(ValueError):
     """The document exceeds a configured page or passage limit."""
 
 
-def pdf_page_count(path: str | Path) -> int:
-    """Pages in a PDF, read from its page tree — no text is extracted."""
-    doc = fitz.open(str(path))
-    try:
-        return doc.page_count
-    finally:
-        doc.close()
-
-
 def extract_pages(doc_path: str | Path, max_pages: int | None = None) -> list[str]:
     """Return the document's text, one entry per page-like unit (0-indexed).
 
@@ -399,12 +390,17 @@ def extract_pages(doc_path: str | Path, max_pages: int | None = None) -> list[st
             f"(supported: {', '.join(sorted(SUPPORTED_EXTENSIONS))})"
         )
     if max_pages and path.suffix.lower() == ".pdf":
-        n = pdf_page_count(path)
-        if n > max_pages:
-            raise DocumentTooLarge(f"this document has {n} pages; this server indexes at most {max_pages}")
+        with fitz.open(str(path)) as doc:            # reads the page tree only
+            _check_pages(doc.page_count, "page", max_pages)
+        return extractor(path)
     pages = extractor(path)
-    if max_pages and len(pages) > max_pages:
-        raise DocumentTooLarge(
-            f"this document has {len(pages)} {unit_for(path)}s; this server indexes at most {max_pages}"
-        )
+    if max_pages:
+        _check_pages(len(pages), unit_for(path), max_pages)
     return pages
+
+
+def _check_pages(count: int, unit: str, max_pages: int) -> None:
+    if count > max_pages:
+        raise DocumentTooLarge(
+            f"this document has {count} {unit}s; this server indexes at most {max_pages}"
+        )

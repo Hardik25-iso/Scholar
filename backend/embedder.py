@@ -15,9 +15,8 @@ from functools import lru_cache
 import numpy as np
 from tokenizers import Tokenizer
 
-from backend.onnx_runtime import EMBEDDER_DIR, precision, session, tokenizer
+from backend.onnx_runtime import EMBEDDER_DIR, session, tokenizer
 
-MODEL_NAME = "sentence-transformers/all-mpnet-base-v2"
 EMBEDDING_DIM = 768
 
 # The model's fine-tuned max_seq_length (512 is the architectural ceiling; 384
@@ -25,12 +24,6 @@ EMBEDDING_DIM = 768
 # which is why the chunker sizes chunks to fit — see chunker.py.
 MAX_SEQ_LENGTH = 384
 
-# ONE text per model call. Measured in the image on one thread (full-length
-# chunks): batch 1 = 793 ms/chunk at +21 MB peak; batch 2 = 850 ms at +93 MB;
-# batch 8 = 1253 ms at +360 MB. Batching pays off on many cores; on one it only
-# adds padding and cache pressure — slower AND several hundred MB heavier, which
-# on a 512 MB instance is the difference between indexing and being OOM-killed.
-DEFAULT_BATCH_SIZE = 1
 
 
 @lru_cache(maxsize=1)
@@ -43,45 +36,34 @@ def _encoder() -> Tokenizer:
     return tok
 
 
-def _batch_size() -> int:
+def embed(texts: list[str]) -> np.ndarray:
+    """Return a float32 array of shape (len(texts), 768), L2-normalised."""
     from backend.config import settings
 
-    return settings.embed_batch_size or DEFAULT_BATCH_SIZE
-
-
-def embed(
-    texts: list[str], batch_size: int | None = None, progress: bool = True
-) -> np.ndarray:
-    """Return a float32 array of shape (len(texts), 768), L2-normalised.
-
-    `progress` is accepted for interface compatibility and ignored: on a
-    server, a progress bar is log noise, and indexing reports its outcome
-    through the IndexJob row instead.
-    """
-    del progress
     out = np.empty((len(texts), EMBEDDING_DIM), dtype=np.float32)
     if not texts:
         return out
 
-    sess = session(EMBEDDER_DIR, precision())
-    wanted = {i.name for i in sess.get_inputs()}
+    sess = session(EMBEDDER_DIR)
     tok = _encoder()
-    size = batch_size or _batch_size()
+    # Texts per model call (EMBED_BATCH_SIZE, default 1). Measured in the image
+    # on one thread, full-length chunks: batch 1 = 793 ms/chunk at +21 MB peak;
+    # batch 8 = 1253 ms at +360 MB. Batching pays off on many cores; on one it
+    # only adds padding and cache pressure — slower AND hundreds of MB heavier.
+    size = settings.embed_batch_size
 
-    # If batching is configured (EMBED_BATCH_SIZE > 1, for a machine with cores
-    # to spare), group texts of similar length: padding to the longest member is
-    # pure wasted compute. Results are written back by index, so the caller's
-    # order is unaffected.
+    # When batching IS configured, group texts of similar length: padding to the
+    # longest member is wasted compute. Results are written back by index, so
+    # the caller's order is unaffected.
     order = sorted(range(len(texts)), key=lambda i: len(texts[i]))
     for start in range(0, len(order), size):
         idx = order[start:start + size]
-        encodings = tok.encode_batch([str(texts[i]).strip() for i in idx])
+        # .strip(): sentence-transformers strips its inputs, so matching its
+        # vectors means doing the same.
+        encodings = tok.encode_batch([texts[i].strip() for i in idx])
         ids = np.array([e.ids for e in encodings], dtype=np.int64)
         mask = np.array([e.attention_mask for e in encodings], dtype=np.int64)
-        feed = {"input_ids": ids, "attention_mask": mask}
-        if "token_type_ids" in wanted:
-            feed["token_type_ids"] = np.zeros_like(ids)
-        hidden = sess.run(None, {k: v for k, v in feed.items() if k in wanted})[0]
+        hidden = sess.run(None, {"input_ids": ids, "attention_mask": mask})[0]
 
         # Mean over REAL tokens only — padding must not dilute the average.
         weights = mask[..., None].astype(np.float32)

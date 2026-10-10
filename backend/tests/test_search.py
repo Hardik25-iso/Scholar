@@ -208,7 +208,7 @@ def test_shortlist_finds_an_exact_reference_dense_search_misses(tmp_path: Path):
         chunk("agreement", 2, "8.1 Termination. Either party may terminate immediately on "
                               "written notice for an unremedied material breach."),
     ]
-    append_to_store(chunks, embed([c.embed_text for c in chunks], progress=False), tmp_path)
+    append_to_store(chunks, embed([c.embed_text for c in chunks]), tmp_path)
     lexical.index_chunks(chunks, tmp_path)
 
     top, _ = shortlist("What does Section 7.2 say?", tmp_path, Retriever(tmp_path), k=3)
@@ -225,7 +225,7 @@ def test_shortlist_can_be_restricted_to_selected_documents(tmp_path: Path):
         chunk("contract_a", 0, "7.2 Force Majeure. Neither party shall be liable for delay."),
         chunk("contract_b", 0, "7.2 Assignment. Neither party may assign without consent."),
     ]
-    append_to_store(chunks, embed([c.embed_text for c in chunks], progress=False), tmp_path)
+    append_to_store(chunks, embed([c.embed_text for c in chunks]), tmp_path)
     lexical.index_chunks(chunks, tmp_path)
 
     retriever = Retriever(tmp_path)
@@ -251,7 +251,7 @@ def test_a_lexically_found_passage_still_carries_its_audit_trail(tmp_path: Path)
               embed_text="7.2 Force Majeure. Neither party shall be liable for delay.",
               char_start=100, char_end=159, unit="section"),
     ]
-    append_to_store(chunks, embed([c.embed_text for c in chunks], progress=False), tmp_path)
+    append_to_store(chunks, embed([c.embed_text for c in chunks]), tmp_path)
     lexical.index_chunks(chunks, tmp_path)
 
     retriever = Retriever(tmp_path)
@@ -272,7 +272,7 @@ def test_dense_only_shortlist_reproduces_the_pre_hybrid_path(tmp_path: Path):
 
     chunks = [chunk("d", i, f"Paragraph number {i} about retrieval augmented generation.")
               for i in range(4)]
-    append_to_store(chunks, embed([c.embed_text for c in chunks], progress=False), tmp_path)
+    append_to_store(chunks, embed([c.embed_text for c in chunks]), tmp_path)
     lexical.index_chunks(chunks, tmp_path)
 
     retriever = Retriever(tmp_path)

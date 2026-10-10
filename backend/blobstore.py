@@ -202,14 +202,3 @@ class SupabaseBlobStore(BlobStore):
             )
             self._check(response, "delete")
 
-
-def from_settings() -> BlobStore:
-    from backend import library
-    from backend.config import settings
-
-    if settings.storage_backend == "supabase":
-        return SupabaseBlobStore(settings.supabase_url, settings.supabase_service_key,
-                                 settings.supabase_bucket)
-    if settings.storage_backend != "local":
-        raise BlobStoreError(f"STORAGE_BACKEND must be 'local' or 'supabase', got {settings.storage_backend!r}")
-    return LocalBlobStore(library.DATA_ROOT)

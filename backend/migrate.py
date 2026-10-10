@@ -29,14 +29,13 @@ What it does:
 import argparse
 import shutil
 import sys
-from pathlib import Path
 
 from sqlalchemy import inspect, text
-from sqlmodel import Session, SQLModel, select
+from sqlmodel import Session, select
 
 from backend import library
 from backend.db import engine, init_db
-from backend.db_models import AnswerLog, Membership, Paper, User, Workspace
+from backend.db_models import AnswerLog, Paper, User
 from backend.workspaces import ensure_personal_workspace
 
 

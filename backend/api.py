@@ -58,7 +58,7 @@ def _warm_models() -> None:
     log and move on rather than taking the whole app with us.
     """
     try:
-        embed(["warm up the embedder"], progress=False)          # mpnet
+        embed(["warm up the embedder"])          # mpnet
         _reranker.rerank("warm up", [                            # cross-encoder
             Citation(paper_id="_", page=0, chunk_index=0, score=0.0, text="warm up passage")
         ], top_k=1)
@@ -245,7 +245,7 @@ def health(response: Response) -> dict[str, object]:
 
     # Embedder: already loaded by the warm thread; this confirms it can encode.
     try:
-        embed(["health check"], progress=False)
+        embed(["health check"])
         checks["embedder"] = "ok"
     except Exception as exc:  # noqa: BLE001
         checks["embedder"] = f"error: {exc}"

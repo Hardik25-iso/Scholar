@@ -119,7 +119,7 @@ def _check(monkeypatch, value: str, min_cosine: float, logit_tol: float | None, 
 
     meta, ref = _reference()
 
-    vectors = embed(meta["texts"], progress=False)
+    vectors = embed(meta["texts"])
     assert vectors.shape == ref["vectors"].shape
     np.testing.assert_allclose(np.linalg.norm(vectors, axis=1), 1.0, atol=1e-5)
     cosines = (vectors * ref["vectors"]).sum(axis=1)
@@ -172,7 +172,7 @@ def test_concurrent_first_use_builds_one_session(monkeypatch):
 
     built = []
 
-    def slow_build(model, precision):
+    def slow_build(model, model_precision):
         built.append(model)
         time.sleep(0.2)                       # a model load takes a while
         return object()
@@ -180,7 +180,7 @@ def test_concurrent_first_use_builds_one_session(monkeypatch):
     monkeypatch.setattr(onnx_runtime, "_sessions", {})
     monkeypatch.setattr(onnx_runtime, "_build_session", slow_build)
     results = []
-    threads = [threading.Thread(target=lambda: results.append(onnx_runtime.session("m", "int8")))
+    threads = [threading.Thread(target=lambda: results.append(onnx_runtime.session("m")))
                for _ in range(4)]
     for t in threads:
         t.start()

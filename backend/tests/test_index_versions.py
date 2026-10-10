@@ -25,6 +25,7 @@ from backend.db import engine
 from backend.db_models import User, Workspace, WorkspaceIndex
 from backend.models import Chunk
 from backend.store import append_to_store, load
+from backend.tests.conftest import index_dir
 
 
 @pytest.fixture
@@ -62,7 +63,7 @@ def _adder(paper_id: str, seed: int = 0):
 
 
 def _papers_in(ws: int) -> set[str]:
-    _, chunks = load(library.current_index_dir(ws))
+    _, chunks = load(index_dir(ws))
     return {c.paper_id for c in chunks}
 
 
@@ -72,19 +73,20 @@ def _stored_versions(ws: int) -> set[str]:
 
 
 def test_a_publish_makes_a_complete_version_current(ws):
-    assert library.current_version(ws) is None
+    assert library.current_index(ws) is None
     assert library._publish(ws, _adder("alpha")) == 3
-    version, fingerprint, n = library.current_version(ws)
-    assert n == 3 and version
+    state = library.current_index(ws)
+    version, fingerprint = state.version, state.fingerprint
+    assert state.n_chunks == 3 and version
     # The recorded fingerprint is exactly what audit computes from the files,
     # so answers logged before versioning still compare correctly.
-    assert fingerprint == audit.index_fingerprint(library.current_index_dir(ws))[0]
+    assert fingerprint == audit.index_fingerprint(index_dir(ws))[0]
     assert _stored_versions(ws) == {version}
 
 
 def test_an_upload_that_dies_part_way_changes_nothing(ws, monkeypatch):
     library._publish(ws, _adder("alpha"))
-    before = library.current_version(ws)
+    before = library.current_index(ws).version
 
     real_put = LocalBlobStore.put
     calls = {"n": 0}
@@ -101,7 +103,7 @@ def test_an_upload_that_dies_part_way_changes_nothing(ws, monkeypatch):
     monkeypatch.setattr(LocalBlobStore, "put", real_put)
 
     # Readers see exactly the old library — not a mix, not an empty one.
-    assert library.current_version(ws) == before
+    assert library.current_index(ws).version == before
     library.invalidate(ws)
     assert _papers_in(ws) == {"alpha"}
     # The dead write left an orphan version behind...
@@ -110,8 +112,8 @@ def test_an_upload_that_dies_part_way_changes_nothing(ws, monkeypatch):
     # ...which the next successful write sweeps away.
     library._publish(ws, _adder("gamma", seed=2))
     assert _papers_in(ws) == {"alpha", "gamma"}
-    current = library.current_version(ws)[0]
-    assert _stored_versions(ws) == {current, before[0]}   # current + previous only
+    current = library.current_index(ws).version
+    assert _stored_versions(ws) == {current, before}   # current + previous only
 
 
 def test_a_concurrent_writer_that_switches_first_loses_nothing(ws, monkeypatch):
@@ -153,7 +155,8 @@ def test_the_previous_version_stays_readable_after_a_switch(ws):
     """A request that loaded version N may still be running lexical search on
     it when N+1 goes live; its files must not vanish underneath it."""
     library._publish(ws, _adder("alpha"))
-    old_version, old_fp, _ = library.current_version(ws)
+    old = library.current_index(ws)
+    old_version, old_fp = old.version, old.fingerprint
     old_dir = library.local_index_dir(ws, old_version)
 
     library._publish(ws, _adder("beta", seed=1))
@@ -179,13 +182,13 @@ def test_a_pre_versioning_library_is_adopted_then_replaced(ws):
     lexical.index_chunks(chunks, legacy)
     expected_fp = audit.index_fingerprint(legacy)[0]
 
-    version, fingerprint, n = library.current_version(ws)
-    assert (version, fingerprint, n) == ("", expected_fp, 3)
+    state = library.current_index(ws)
+    assert (state.version, state.fingerprint, state.n_chunks) == ("", expected_fp, 3)
     assert _papers_in(ws) == {"old"}
 
     library._publish(ws, _adder("new", seed=8))
     assert _papers_in(ws) == {"old", "new"}
-    assert library.current_version(ws)[0] != ""
+    assert library.current_index(ws).version != ""
     # The adopted files are now just "the previous version" and are kept as such.
     assert (legacy / "chunks.json").exists()
 
@@ -193,7 +196,7 @@ def test_a_pre_versioning_library_is_adopted_then_replaced(ws):
 def test_deleting_the_last_document_empties_the_library(ws):
     library._publish(ws, _adder("only"))
     library.delete_paper_data(ws, "only")
-    assert library.current_version(ws) is None
+    assert library.current_index(ws) is None
     assert library.get_retriever(ws) is None
     assert _stored_versions(ws) == set()
     with Session(engine) as session:
@@ -204,7 +207,7 @@ def test_chunks_json_bytes_define_the_fingerprint(ws):
     """Guard on the audit contract: the fingerprint is sha256 of chunks.json,
     and versioning must not change how chunks.json is written."""
     library._publish(ws, _adder("alpha"))
-    raw = (library.current_index_dir(ws) / "chunks.json").read_bytes()
+    raw = (index_dir(ws) / "chunks.json").read_bytes()
     assert json.loads(raw)[0]["paper_id"] == "alpha"
     # indent=2, unchanged. (store.py writes in text mode, so line endings are
     # the platform's — that predates versioning and is not asserted here.)

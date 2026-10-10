@@ -10,7 +10,9 @@ These are cheap (tokenizer only, no embedding model) and run on every commit.
 """
 import pytest
 
-from backend.chunker import CHUNK_TOKENS, MAX_SEQ_LENGTH, OVERLAP, chunk_pages, count_tokens
+from backend.chunker import (
+    CHUNK_TOKENS, MAX_SEQ_LENGTH, OVERLAP, SPECIAL_TOKENS, chunk_pages, count_tokens,
+)
 
 PARAGRAPH = (
     "Retrieval-augmented generation combines a parametric seq2seq model with a "
@@ -34,7 +36,7 @@ def test_no_chunk_exceeds_the_embedder_window():
 
 def test_budget_arithmetic_leaves_room_for_the_special_tokens():
     """380 content tokens + [CLS] + [SEP] must fit in 384."""
-    assert CHUNK_TOKENS + 2 <= MAX_SEQ_LENGTH
+    assert CHUNK_TOKENS + SPECIAL_TOKENS <= MAX_SEQ_LENGTH
 
 
 def test_a_long_page_produces_multiple_chunks():

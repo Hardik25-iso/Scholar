@@ -4,10 +4,12 @@
     python -m backend.eval --build-corpus       # the generated PDFs it reads
     python scripts/make_golden_fixtures.py
 
-Run ONCE, against the torch implementation, and commit what it writes. The
-point is that the reference is captured from the code being replaced, not
-re-derived from the replacement: a parity test whose expected values come from
-the new code proves nothing.
+The embeddings and logits always come from sentence-transformers + torch, so
+re-running this re-captures the true reference. The CHUNKER golden is
+different: it records whatever backend.chunker produces at the time, so it was
+captured once at the torch-era commit (71dbe23) and re-running it later only
+re-baselines it. A parity test whose expected values come from the new code
+proves nothing.
 
 What it writes to backend/tests/fixtures/:
 
@@ -58,10 +60,12 @@ def _long_pages(base: str) -> list[str]:
 
 
 def main() -> int:
-    from sentence_transformers import CrossEncoder
+    # The REFERENCE side must come from torch itself. backend.embedder is the
+    # ONNX port now; using it here would make the parity test compare the port
+    # with itself and pass by construction.
+    from sentence_transformers import CrossEncoder, SentenceTransformer
 
     from backend.chunker import chunk_pages
-    from backend.embedder import embed
     from backend.parser import extract_pages
     from backend.reranker import RERANKER_MODEL
 
@@ -96,7 +100,9 @@ def main() -> int:
     # Embeddings: every generated passage (they are short documents) plus the
     # questions, so both index-time and query-time inputs are covered.
     texts = passages + questions
-    vectors = embed(texts, progress=False)
+    vectors = SentenceTransformer("sentence-transformers/all-mpnet-base-v2").encode(
+        texts, batch_size=1, convert_to_numpy=True, normalize_embeddings=True
+    )
 
     # Cross-encoder: each of the first 12 questions against 8 passages, the
     # unit the reranker actually sees — a ranking within one question.

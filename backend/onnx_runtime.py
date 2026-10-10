@@ -48,6 +48,12 @@ _MODEL_FILES = {
 DEFAULT_MODELS_DIR = Path(__file__).parent.parent / "models"
 
 
+def _precision() -> str:
+    from backend.config import settings
+
+    return settings.model_precision
+
+
 def models_dir() -> Path:
     # Read lazily: a module that names a model must be importable without a
     # configured deployment (see the note in reranker.py).
@@ -56,21 +62,11 @@ def models_dir() -> Path:
     return Path(settings.models_dir) if settings.models_dir else DEFAULT_MODELS_DIR
 
 
-def precision() -> str:
-    from backend.config import settings
-
-    if settings.model_precision not in _MODEL_FILES:
-        raise ValueError(
-            f"MODEL_PRECISION must be one of {sorted(_MODEL_FILES)}, got {settings.model_precision!r}"
-        )
-    return settings.model_precision
-
-
 def _require(path: Path) -> Path:
     if not path.exists():
         raise FileNotFoundError(
             f"model file missing: {path}. Run `python scripts/fetch_models.py "
-            f"--precision {precision()}` (or set MODELS_DIR)."
+            f"--precision {_precision()}` (or set MODELS_DIR)."
         )
     return path
 
@@ -79,8 +75,10 @@ _sessions: dict[tuple[str, str], ort.InferenceSession] = {}
 _sessions_lock = threading.Lock()
 
 
-def session(model: str, model_precision: str) -> ort.InferenceSession:
-    """One InferenceSession per (model, precision), built on first use.
+def session(model: str) -> ort.InferenceSession:
+    """The model's InferenceSession at the configured precision, built on
+    first use and kept (one per precision, so switching it — as the parity
+    tests do — loads the other file rather than reusing the wrong one).
 
     Built under a lock, NOT with lru_cache: lru_cache does not lock, so when
     the start-up warm-up thread and the first request both miss the cache,
@@ -89,13 +87,13 @@ def session(model: str, model_precision: str) -> ort.InferenceSession:
     across a multi-second model load is fine here: nothing can answer without
     the model anyway, and the second caller simply waits for the first's copy.
     """
-    key = (model, model_precision)
+    key = (model, _precision())
     found = _sessions.get(key)
     if found is not None:
         return found
     with _sessions_lock:
         if key not in _sessions:
-            _sessions[key] = _build_session(model, model_precision)
+            _sessions[key] = _build_session(*key)
         return _sessions[key]
 
 

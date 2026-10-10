@@ -116,7 +116,7 @@ def test_shortlist_ignores_expansion_when_mode_is_none(tmp_path):
 
     chunks = [Chunk(paper_id="d", page=0, chunk_index=i, text=f"Paragraph {i} about retrieval.",
                     embed_text=f"Paragraph {i} about retrieval.") for i in range(4)]
-    append_to_store(chunks, embed([c.embed_text for c in chunks], progress=False), tmp_path)
+    append_to_store(chunks, embed([c.embed_text for c in chunks]), tmp_path)
     lexical.index_chunks(chunks, tmp_path)
 
     _, effective = shortlist("retrieval", tmp_path, Retriever(tmp_path), k=4,

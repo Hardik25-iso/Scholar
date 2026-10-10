@@ -191,7 +191,7 @@ def build_index(docs: dict[str, Path], store_dir: Path) -> dict[str, int]:
         if not chunks:
             print(f"  WARNING: {doc_id} produced no chunks")
             continue
-        append_to_store(chunks, embed([c.embed_text for c in chunks], progress=False), store_dir)
+        append_to_store(chunks, embed([c.embed_text for c in chunks]), store_dir)
         lexical.index_chunks(chunks, store_dir)
         counts[doc_id] = len(chunks)
         print(f"  indexed {doc_id}: {len(chunks)} chunks")

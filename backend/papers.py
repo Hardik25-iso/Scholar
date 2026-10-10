@@ -31,13 +31,8 @@ from backend.workspaces import get_current_workspace, require_membership
 
 router = APIRouter(prefix="/papers", tags=["papers"])
 
-# The cap is configured (MAX_UPLOAD_MB): 20 MB locally, lower on a small host,
-# where it bounds both what is buffered and how long indexing can take.
+# Uploads are read in blocks of this size, never whole (see upload_paper).
 _READ_BLOCK = 1 << 20
-
-
-def _max_upload_bytes() -> int:
-    return settings.max_upload_mb * 1024 * 1024
 
 # Served back to the browser on GET /{id}/file. The office formats are
 # downloads, not renderable documents, so only PDF and text open in place.
@@ -146,7 +141,7 @@ async def upload_paper(
     # Streamed to a temp file a block at a time, refusing as soon as the cap is
     # passed — never holding the whole upload in memory, which on a 512 MB
     # instance is not a nicety.
-    limit = _max_upload_bytes()
+    limit = settings.max_upload_mb * 1024 * 1024
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as spool:
         received = Path(spool.name)
         size = 0

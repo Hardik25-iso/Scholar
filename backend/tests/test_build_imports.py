@@ -27,7 +27,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 from backend.config import Settings  # noqa: E402 — needs REPO_ROOT resolved first
 
 # The modules that name the models.
-BUILD_IMPORTS = "from backend.embedder import MODEL_NAME; from backend.reranker import RERANKER_MODEL"
+BUILD_IMPORTS = "from backend import chunker, embedder, onnx_runtime; from backend.reranker import RERANKER_MODEL"
 
 
 def _unconfigured_env() -> dict[str, str]:
@@ -51,7 +51,7 @@ def test_build_time_imports_need_no_environment(tmp_path):
     # build's situation. Without this the test passes for the wrong reason.
     env = _unconfigured_env()
     result = subprocess.run(
-        [sys.executable, "-c", f"{BUILD_IMPORTS}; print(MODEL_NAME, RERANKER_MODEL)"],
+        [sys.executable, "-c", f"{BUILD_IMPORTS}; print(RERANKER_MODEL)"],
         cwd=tmp_path,
         env=env,
         capture_output=True,

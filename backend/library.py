@@ -27,6 +27,8 @@ host with an ephemeral disk simply fetches it again.
 Personal libraries are ordinary workspaces flagged `is_personal`, so there is
 exactly one storage and retrieval path rather than two that drift apart.
 """
+import ctypes
+import gc
 import logging
 import os
 import re
@@ -40,7 +42,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import text
+from sqlalchemy import text, update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 
@@ -48,6 +50,8 @@ from backend import audit, lexical
 from backend.blobstore import BlobStore, LocalBlobStore, SupabaseBlobStore
 from backend.chunker import chunk_pages
 from backend.config import settings
+from backend.db import engine
+from backend.db_models import WorkspaceIndex
 from backend.embedder import embed
 from backend.parser import DocumentTooLarge, extract_pages, unit_for
 from backend.retriever import Retriever
@@ -82,7 +86,7 @@ _PUBLISH_ATTEMPTS = 3
 _LOCK_NAMESPACE = 0x5C40
 
 
-# ——— the blob store ———
+# ——— the blob store and its keys ———
 
 _supabase: SupabaseBlobStore | None = None
 
@@ -105,15 +109,11 @@ def _index_key(workspace_id: int, version: str, name: str = "") -> str:
     return base + name
 
 
-def workspace_papers_dir(workspace_id: int) -> Path:
-    """Where the LOCAL store keeps a workspace's originals. Only meaningful with
-    STORAGE_BACKEND=local; code that must work with any backend goes through
-    blob_store() / stored_path() instead."""
-    return DATA_ROOT / str(workspace_id) / "papers"
-
-
-def paper_key(workspace_id: int, paper_id: str, suffix: str) -> str:
-    return f"{workspace_id}/papers/{paper_id}{suffix}"
+def _paper_prefix(workspace_id: int, paper_id: str) -> str:
+    """Every stored file of one paper, whatever its extension. `paper_id` is a
+    slug only this module mints (see `slugify`), so `<paper_id>.` cannot match
+    another paper's file."""
+    return f"{workspace_id}/papers/{paper_id}."
 
 
 def slugify(name: str) -> str:
@@ -124,14 +124,7 @@ def slugify(name: str) -> str:
 # ——— the current-version pointer ———
 
 
-def _engine():
-    # Imported lazily: backend.db builds the engine from settings at import time.
-    from backend.db import engine
-
-    return engine
-
-
-def _current(session: Session, workspace_id: int):
+def _current(session: Session, workspace_id: int) -> WorkspaceIndex | None:
     """The workspace's WorkspaceIndex row, adopting a pre-versioning library.
 
     A library written before versioning existed has its files directly under
@@ -139,15 +132,13 @@ def _current(session: Session, workspace_id: int):
     records that layout as version "" — after which it is an ordinary version
     and the next write replaces it like any other.
     """
-    from backend.db_models import WorkspaceIndex
-
     row = session.get(WorkspaceIndex, workspace_id)
     if row is not None:
         return row
     legacy = blob_store().list_keys(_index_key(workspace_id, ""))
     if not all(_index_key(workspace_id, "", f) in legacy for f in ("index.faiss", "chunks.json")):
         return None
-    with tempfile.TemporaryDirectory(dir=_cache_dir()) as tmp:
+    with tempfile.TemporaryDirectory(dir=_work_dir()) as tmp:
         if not blob_store().get_to_file(_index_key(workspace_id, "", "chunks.json"),
                                         Path(tmp) / "chunks.json"):
             return None
@@ -164,22 +155,24 @@ def _current(session: Session, workspace_id: int):
     return row
 
 
-def current_version(workspace_id: int) -> tuple[str, str, int] | None:
-    """(version, fingerprint, n_chunks) of the live index, or None if empty."""
-    with Session(_engine()) as session:
-        row = _current(session, workspace_id)
-        return (row.version, row.fingerprint, row.n_chunks) if row else None
+def current_index(workspace_id: int) -> WorkspaceIndex | None:
+    """The live index's pointer row (version, fingerprint, n_chunks), or None
+    if the workspace has nothing indexed."""
+    with Session(engine) as session:
+        return _current(session, workspace_id)
 
 
 def current_fingerprint(workspace_id: int) -> str:
-    state = current_version(workspace_id)
-    return state[1] if state else ""
+    state = current_index(workspace_id)
+    return state.fingerprint if state else ""
 
 
 # ——— the local cache ———
 
 
-def _cache_dir() -> Path:
+def _work_dir() -> Path:
+    """Scratch space for builds and in-flight downloads, beside the cache so a
+    finished one can be renamed into place."""
     path = CACHE_ROOT / ".work"
     path.mkdir(parents=True, exist_ok=True)
     return path
@@ -187,6 +180,10 @@ def _cache_dir() -> Path:
 
 def _version_dir(workspace_id: int, version: str) -> Path:
     return CACHE_ROOT / str(workspace_id) / (version or "_legacy")
+
+
+def _papers_cache_dir(workspace_id: int) -> Path:
+    return CACHE_ROOT / "papers" / str(workspace_id)
 
 
 def _fetch_version(workspace_id: int, version: str, dest: Path) -> None:
@@ -210,7 +207,7 @@ def local_index_dir(workspace_id: int, version: str) -> Path:
     final = _version_dir(workspace_id, version)
     if final.exists():
         return final
-    tmp = _cache_dir() / f"fetch-{uuid.uuid4().hex}"
+    tmp = _work_dir() / f"fetch-{uuid.uuid4().hex}"
     try:
         _fetch_version(workspace_id, version, tmp)
         final.parent.mkdir(parents=True, exist_ok=True)
@@ -230,16 +227,10 @@ def _prune_cache(workspace_id: int, keep: set[str]) -> None:
     base = CACHE_ROOT / str(workspace_id)
     if not base.exists():
         return
-    names = {(v or "_legacy") for v in keep}
+    names = {_version_dir(workspace_id, v).name for v in keep}
     for child in base.iterdir():
         if child.name not in names:
             shutil.rmtree(child, ignore_errors=True)
-
-
-def current_index_dir(workspace_id: int) -> Path | None:
-    """Local copy of the CURRENT index, or None if nothing is indexed."""
-    state = current_version(workspace_id)
-    return local_index_dir(workspace_id, state[0]) if state else None
 
 
 # ——— retrieval ———
@@ -269,10 +260,10 @@ def get_retriever(workspace_id: int) -> Retriever | None:
     lexical search and the audit fingerprint must use that directory, so an
     answer is always drawn from — and recorded against — ONE version.
     """
-    state = current_version(workspace_id)
+    state = current_index(workspace_id)
     if state is None:
         return None
-    version = state[0]
+    version = state.version
 
     # Locked: FastAPI serves sync endpoints from a threadpool, so several
     # requests can reach this concurrently and would otherwise race on eviction.
@@ -364,9 +355,10 @@ def _sweep_versions(workspace_id: int, keep: set[str]) -> None:
     """
     try:
         store = blob_store()
+        index_root = _index_key(workspace_id, "")
         stale = []
-        for key in store.list_keys(f"{workspace_id}/index/"):
-            rest = key[len(f"{workspace_id}/index/"):]
+        for key in store.list_keys(index_root):
+            rest = key[len(index_root):]
             version = rest.split("/")[0] if "/" in rest else ""
             if version not in keep:
                 stale.append(key)
@@ -383,12 +375,10 @@ def _publish(workspace_id: int, change: Callable[[Path], None]) -> int:
     `change` must be safe to run more than once: it is re-applied to a newer
     base if another writer got there first.
     """
-    from backend.db_models import WorkspaceIndex
-
     for _ in range(_PUBLISH_ATTEMPTS):
-        work = Path(tempfile.mkdtemp(dir=_cache_dir(), prefix="build-"))
+        work = Path(tempfile.mkdtemp(dir=_work_dir(), prefix="build-"))
         try:
-            with Session(_engine()) as session, _workspace_lock(session, workspace_id):
+            with Session(engine) as session, _workspace_lock(session, workspace_id):
                 current = _current(session, workspace_id)
                 base_version = current.version if current else None
                 if current is not None:
@@ -409,27 +399,25 @@ def _publish(workspace_id: int, change: Callable[[Path], None]) -> int:
                 version = _next_version(base_version)
                 _upload_version(workspace_id, version, work)
                 fingerprint, n_chunks = audit.index_fingerprint(work)
+                values = {"version": version, "fingerprint": fingerprint,
+                          "n_chunks": n_chunks, "updated_at": datetime.now(timezone.utc)}
 
                 # The switch. A compare-and-swap on the version this write was
                 # built from: if someone else switched it meanwhile, nothing is
                 # changed and the whole write is retried on their version.
-                now = datetime.now(timezone.utc)
                 if current is None:
-                    session.add(WorkspaceIndex(workspace_id=workspace_id, version=version,
-                                               fingerprint=fingerprint, n_chunks=n_chunks,
-                                               updated_at=now))
+                    session.add(WorkspaceIndex(workspace_id=workspace_id, **values))
                     try:
                         session.commit()
                     except IntegrityError:
                         session.rollback()
                         continue
                 else:
-                    swapped = session.exec(
-                        text("UPDATE workspaceindex SET version = :new, fingerprint = :fp, "
-                             "n_chunks = :n, updated_at = :now "
-                             "WHERE workspace_id = :ws AND version = :old"),
-                        params={"new": version, "fp": fingerprint, "n": n_chunks, "now": now,
-                                "ws": workspace_id, "old": base_version},
+                    swapped = session.execute(
+                        update(WorkspaceIndex)
+                        .where(WorkspaceIndex.workspace_id == workspace_id,
+                               WorkspaceIndex.version == base_version)
+                        .values(**values)
                     ).rowcount
                     if swapped != 1:
                         session.rollback()
@@ -464,16 +452,6 @@ def _publish(workspace_id: int, change: Callable[[Path], None]) -> int:
 _indexing = threading.Semaphore(1)
 
 
-def _check_limits(chunks: list) -> None:
-    # Pages are checked by the parser, before extraction; this is the bound on
-    # embedding work, which is what decides indexing time.
-    if settings.max_chunks_per_doc and len(chunks) > settings.max_chunks_per_doc:
-        raise DocumentTooLarge(
-            f"this document is too long to index here ({len(chunks)} passages; "
-            f"the limit is {settings.max_chunks_per_doc})"
-        )
-
-
 def index_document(workspace_id: int, doc_path: Path, paper_id: str) -> int:
     """Parse -> chunk -> embed -> publish a new index version with the document.
 
@@ -487,12 +465,18 @@ def index_document(workspace_id: int, doc_path: Path, paper_id: str) -> int:
             # The expensive part happens with no lock held and no index
             # touched: a concurrent question, or another workspace's write, is
             # never blocked behind a long document's embedding.
-            pages = extract_pages(doc_path, max_pages=settings.max_pages or None)
+            pages = extract_pages(doc_path, max_pages=settings.max_pages)
             chunks = chunk_pages(pages, paper_id, unit=unit_for(doc_path))
-            _check_limits(chunks)
+            # Pages were bounded by the parser; this bounds the embedding
+            # work, which is what decides how long indexing takes.
+            if settings.max_chunks_per_doc and len(chunks) > settings.max_chunks_per_doc:
+                raise DocumentTooLarge(
+                    f"this document is too long to index here ({len(chunks)} passages; "
+                    f"the limit is {settings.max_chunks_per_doc})"
+                )
             if not chunks:
                 return 0
-            vectors = embed([c.embed_text for c in chunks], progress=False)
+            vectors = embed([c.embed_text for c in chunks])
 
             def add(work: Path) -> None:
                 # Both stores are written into the same version together, so
@@ -515,12 +499,8 @@ def _release_memory() -> None:
     indexed and stays there — on a 512 MB instance, the NEXT document is then
     the one that gets the process killed. A no-op anywhere without glibc.
     """
-    import gc
-
     gc.collect()
     try:
-        import ctypes
-
         ctypes.CDLL("libc.so.6").malloc_trim(0)
     except (OSError, AttributeError):
         pass
@@ -528,23 +508,22 @@ def _release_memory() -> None:
 
 def delete_paper_data(workspace_id: int, paper_id: str) -> None:
     """Remove a paper's chunks from both indexes and delete its stored file."""
-    if current_version(workspace_id) is not None:
+    if current_index(workspace_id) is not None:
         def drop(work: Path) -> None:
             remove_paper(work, paper_id)
             lexical.remove_paper(work, paper_id)
 
-        _publish(workspace_id, drop)
+        _publish(workspace_id, drop)      # also drops the cached retriever
     delete_stored_paper(workspace_id, paper_id)
-    invalidate(workspace_id)
 
 
 def delete_stored_paper(workspace_id: int, paper_id: str) -> None:
     """Remove a paper's stored original and any local copy of it."""
     store = blob_store()
-    keys = list(store.list_keys(f"{workspace_id}/papers/{paper_id}."))
+    keys = list(store.list_keys(_paper_prefix(workspace_id, paper_id)))
     if keys:
         store.delete(keys)
-    for cached in (CACHE_ROOT / "papers" / str(workspace_id)).glob(f"{paper_id}.*"):
+    for cached in _papers_cache_dir(workspace_id).glob(f"{paper_id}.*"):
         cached.unlink(missing_ok=True)
 
 
@@ -555,44 +534,41 @@ def delete_workspace_data(workspace_id: int, session: Session) -> None:
     with the workspace's other rows. A second session here would deadlock on
     SQLite, whose single writer lock the caller's pending deletes already hold.
     """
-    from backend.db_models import WorkspaceIndex
-
     blob_store().delete_prefix(f"{workspace_id}/")
     row = session.get(WorkspaceIndex, workspace_id)
     if row is not None:
         session.delete(row)
     shutil.rmtree(CACHE_ROOT / str(workspace_id), ignore_errors=True)
-    shutil.rmtree(CACHE_ROOT / "papers" / str(workspace_id), ignore_errors=True)
+    shutil.rmtree(_papers_cache_dir(workspace_id), ignore_errors=True)
     invalidate(workspace_id)
 
 
 def store_paper(workspace_id: int, paper_id: str, suffix: str, source: Path) -> None:
-    """Keep an uploaded original, and a local copy for the indexer to read."""
-    blob_store().put(paper_key(workspace_id, paper_id, suffix), source)
-    cached = _paper_cache_path(workspace_id, paper_id, suffix)
+    """Keep an uploaded original, and MOVE `source` into the local cache so
+    the indexer reads it without a download (or a second copy on disk)."""
+    blob_store().put(f"{workspace_id}/papers/{paper_id}{suffix}", source)
+    cached = _papers_cache_dir(workspace_id) / f"{paper_id}{suffix}"
     cached.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(source, cached)
-
-
-def _paper_cache_path(workspace_id: int, paper_id: str, suffix: str) -> Path:
-    return CACHE_ROOT / "papers" / str(workspace_id) / f"{paper_id}{suffix}"
+    shutil.move(source, cached)
 
 
 def stored_path(workspace_id: int, paper_id: str) -> Path | None:
     """A local copy of a paper's stored original, whatever its format — or
     None if it's gone. Fetched from the blob store on a cache miss.
 
-    Found by prefix rather than assembled, because the extension varies by
-    format and `paper_id` is a slug that only this module mints (see
-    `slugify`), so `<paper_id>.` cannot match another paper's file.
+    The cache is checked first: on a remote store, every miss here is a
+    network round trip, and the in-app viewer asks on every page view.
     """
-    keys = sorted(blob_store().list_keys(f"{workspace_id}/papers/{paper_id}."))
+    # An in-flight download is named ".<random><suffix>", which this pattern
+    # cannot match — only a complete file is ever returned.
+    hit = next(_papers_cache_dir(workspace_id).glob(f"{paper_id}.*"), None)
+    if hit is not None:
+        return hit
+    keys = sorted(blob_store().list_keys(_paper_prefix(workspace_id, paper_id)))
     if not keys:
         return None
-    suffix = keys[0][len(f"{workspace_id}/papers/{paper_id}"):]
-    cached = _paper_cache_path(workspace_id, paper_id, suffix)
-    if cached.exists():
-        return cached
+    suffix = keys[0][len(_paper_prefix(workspace_id, paper_id)) - 1:]
+    cached = _papers_cache_dir(workspace_id) / f"{paper_id}{suffix}"
     tmp = cached.with_name(f".{uuid.uuid4().hex}{suffix}")
     if not blob_store().get_to_file(keys[0], tmp):
         return None
@@ -601,4 +577,4 @@ def stored_path(workspace_id: int, paper_id: str) -> Path | None:
 
 
 def discard_cached_paper(workspace_id: int, paper_id: str, suffix: str) -> None:
-    _paper_cache_path(workspace_id, paper_id, suffix).unlink(missing_ok=True)
+    (_papers_cache_dir(workspace_id) / f"{paper_id}{suffix}").unlink(missing_ok=True)

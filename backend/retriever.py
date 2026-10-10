@@ -53,8 +53,8 @@ class Retriever:
 
     def retrieve(self, question: str, k: int = 5) -> list[Citation]:
         """Return the k chunks most similar to `question`, best first."""
-        # (1, 768) query vector; progress bar off for a single sentence.
-        q_vec = embed([question], progress=False)
+        # (1, 768) query vector.
+        q_vec = embed([question])
 
         # FAISS returns scores and row-ids for the k nearest vectors.
         scores, ids = self.index.search(q_vec, k)

@@ -286,3 +286,15 @@ def pptx_bytes(tmp_path: Path) -> bytes:
     path = tmp_path / "deck.pptx"
     prs.save(str(path))
     return path.read_bytes()
+
+
+def papers_dir(workspace: int):
+    """Where the LOCAL blob store keeps a workspace's originals — for asserting
+    on files directly. App code goes through library.stored_path instead."""
+    return library.DATA_ROOT / str(workspace) / "papers"
+
+
+def index_dir(workspace: int):
+    """Local copy of the workspace's CURRENT index version, or None if empty."""
+    state = library.current_index(workspace)
+    return library.local_index_dir(workspace, state.version) if state else None

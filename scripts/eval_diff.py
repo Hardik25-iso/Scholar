@@ -11,6 +11,7 @@ question is ~2 points: "within 1 point" there means "no question lost".
 import argparse
 import json
 import sys
+from pathlib import Path
 
 
 def main() -> int:
@@ -20,8 +21,8 @@ def main() -> int:
     p.add_argument("--max-drop", type=float, default=1.0, help="allowed hit@k drop, in points")
     args = p.parse_args()
 
-    base = json.load(open(args.baseline, encoding="utf-8"))
-    cand = json.load(open(args.candidate, encoding="utf-8"))
+    base = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
+    cand = json.loads(Path(args.candidate).read_text(encoding="utf-8"))
 
     lost, gained, moved = [], [], []
     for qid, before in base["ranks"].items():

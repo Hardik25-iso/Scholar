@@ -338,7 +338,9 @@ def _resolve_and_retrieve(
         query,
         retriever.store_dir,   # the version this retriever holds — FAISS and FTS5 agree
         retriever,
-        k=request.candidates,
+        # The client may ask for fewer, never more: each candidate is a full
+        # cross-encoder pass, and this is a CPU budget, not a preference.
+        k=min(request.candidates, settings.rerank_candidates),
         papers=request.papers,
         expansion_mode=settings.query_expansion,
     )

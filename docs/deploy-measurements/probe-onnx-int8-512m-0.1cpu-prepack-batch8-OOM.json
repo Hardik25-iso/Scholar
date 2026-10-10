@@ -1,0 +1,17 @@
+{
+  "image": "scholar:onnx",
+  "limits": {
+    "memory": "512m",
+    "cpus": "0.1"
+  },
+  "max_pages": 25,
+  "boot_to_listening_s": 56.6,
+  "boot_to_models_ready_s": 188.4,
+  "failed": "Server disconnected without sending a response.",
+  "docker_stats_peak_mib_by_phase": {
+    "boot": 488.6,
+    "index_attention": 511.7
+  },
+  "oom_killed": true,
+  "logs_tail": "INFO:     172.17.0.1:60406 - \"GET /health HTTP/1.1\" 200 OK\nINFO:     172.17.0.1:60406 - \"POST /auth/register HTTP/1.1\" 201 Created\nINFO:     172.17.0.1:60406 - \"POST /papers HTTP/1.1\" 202 Accepted\nINFO:     172.17.0.1:60406 - \"GET /papers/jobs/1 HTTP/1.1\" 200 OK\nINFO:     172.17.0.1:60406 - \"GET /papers/jobs/1 HTTP/1.1\" 200 OK\nINFO:     172.17.0.1:60406 - \"GET /papers/jobs/1 HTTP/1.1\" 200 OK\nINFO:     172.17.0.1:60406 - \"GET /papers/jobs/1 HTTP/1.1\" 200 OK\nINFO:     172.17.0.1:60406 - \"GET /papers/jobs/1 HTTP/1.1\" 200 OK"
+}

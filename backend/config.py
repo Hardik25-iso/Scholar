@@ -56,9 +56,28 @@ class Settings(BaseSettings):
     # "int8" (default) or "fp32". fp32 mpnet alone is 436 MB of weights, so on a
     # 512 MB instance int8 is the only choice; fp32 is for parity tests and eval.
     model_precision: str = "int8"
-    # Texts per embedding call. Activation memory grows with this, so it is the
-    # first knob to turn down if indexing a large document runs out of memory.
-    embed_batch_size: int = 8
+    # Texts per embedding call. 1 is fastest AND lightest on a single thread
+    # (measured: see embedder.py); raise it only on a machine with cores to
+    # spare, and expect activation memory to grow with it.
+    embed_batch_size: int = 1
+
+    # ——— reranking cost ———
+    #
+    # The cross-encoder is the most CPU-hungry step of a question: one full model
+    # pass per candidate. On a fraction of a CPU these three are the levers, and
+    # each one's effect on retrieval quality is measured, not assumed (see
+    # docs/deploy-measurements/).
+    #
+    # The most candidates one question may rerank. Also a CAP on the client's
+    # `candidates` request field — without it any logged-in user could ask for
+    # hundreds of model passes in a single request.
+    rerank_candidates: int = 20
+    # Tokens per (question, passage) pair fed to the cross-encoder; the model's
+    # ceiling is 512. Cost grows with length, and most of the relevance signal
+    # is near the start of a passage.
+    rerank_max_tokens: int = 512
+    # Off = keep the fused (dense + lexical) order and skip the cross-encoder.
+    rerank_enabled: bool = True
 
     # ——— limits that keep one document within the instance's budget ———
     #

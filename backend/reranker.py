@@ -29,27 +29,30 @@ RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 # this has its LONGER side trimmed first ("longest_first"), as before.
 MAX_LENGTH = 512
 
-# Pairs scored per model call. Attention memory grows with batch x seq^2, and a
-# shortlist is ~20 pairs of up to ~400 tokens — scoring them all at once is a
-# memory spike for no gain on a single-core slice.
-BATCH_SIZE = 8
+# Pairs scored per model call. Measured in the image on one thread: batch 1 =
+# 140 ms/pair at +25 MB peak; batch 8 = 209 ms/pair at +236 MB. One at a time
+# is both faster and lighter on a single core — see embedder.DEFAULT_BATCH_SIZE.
+BATCH_SIZE = 1
 
 
-@lru_cache(maxsize=1)
-def _encoder() -> Tokenizer:
+@lru_cache(maxsize=2)
+def _encoder(max_length: int = MAX_LENGTH) -> Tokenizer:
     tok = tokenizer(RERANKER_DIR)
-    tok.enable_truncation(MAX_LENGTH, strategy="longest_first")
+    tok.enable_truncation(min(max_length, MAX_LENGTH), strategy="longest_first")
     tok.enable_padding(pad_id=tok.token_to_id("[PAD]"), pad_token="[PAD]")
     return tok
 
 
-def score_pairs(pairs: list[tuple[str, str]]) -> np.ndarray:
-    """Raw relevance logits for (question, passage) pairs. Higher = more relevant."""
+def score_pairs(pairs: list[tuple[str, str]], max_length: int = MAX_LENGTH) -> np.ndarray:
+    """Raw relevance logits for (question, passage) pairs. Higher = more relevant.
+
+    `max_length` trims each pair (longer side first) — the main cost lever on a
+    slow CPU, since a pass costs roughly in proportion to its length."""
     if not pairs:
         return np.empty(0, dtype=np.float32)
     sess = session(RERANKER_DIR, precision())
     wanted = {i.name for i in sess.get_inputs()}
-    tok = _encoder()
+    tok = _encoder(max_length)
 
     scores: list[np.ndarray] = []
     for start in range(0, len(pairs), BATCH_SIZE):
@@ -82,9 +85,17 @@ class Reranker:
         """
         if not candidates:
             return []
+        # Settings are read HERE, not at import time — see the note below.
+        from backend.config import settings
+
+        if not settings.rerank_enabled:
+            # Stage 1's fused order IS the ranking. A deliberate, measured
+            # trade for a CPU too small to run the cross-encoder in time.
+            return candidates[:top_k]
 
         # Score every (question, passage) pair jointly. Higher = more relevant.
-        scores = score_pairs([(question, c.text) for c in candidates])
+        scores = score_pairs([(question, c.text) for c in candidates],
+                             max_length=settings.rerank_max_tokens)
 
         # Attach the stage-2 score to each candidate (keeps the stage-1 cosine too).
         for citation, score in zip(candidates, scores):
@@ -102,8 +113,6 @@ class Reranker:
         # module-level `settings` would construct Settings() and fail on a
         # missing SECRET_KEY wherever there is no environment (an image build,
         # a one-off script).
-        from backend.config import settings
-
         if settings.mmr_enabled if use_mmr is None else use_mmr:
             return mmr.select(ranked, k=top_k, lam=settings.mmr_lambda)
         return ranked[:top_k]

@@ -19,6 +19,11 @@ memory or latency concern rather than a preference:
     and a plateau under a hard RAM limit.
   * ORT_ENABLE_EXTENDED — the full ENABLE_ALL level adds layout transforms
     that mostly pay off on many cores and cost load-time memory here.
+  * session.disable_prepacking — by default the runtime keeps a second,
+    re-laid-out copy of every quantised weight matrix for faster matmuls.
+    Measured in the image: the int8 mpnet session costs +218 MB with it and
+    +122 MB without, for ~10% slower inference. On a 512 MB instance that
+    copy is the difference between fitting and being OOM-killed at warm-up.
 
 TOKENIZER TRAP. mpnet's tokenizer.json ships with truncation AND padding fixed
 at 128 tokens. Loaded as-is, every chunk would be cut to a third of its length
@@ -78,6 +83,7 @@ def session(model: str, model_precision: str) -> ort.InferenceSession:
     options.inter_op_num_threads = 1
     options.enable_cpu_mem_arena = False
     options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_EXTENDED
+    options.add_session_config_entry("session.disable_prepacking", "1")
     return ort.InferenceSession(str(path), sess_options=options, providers=["CPUExecutionProvider"])
 
 

@@ -25,10 +25,12 @@ EMBEDDING_DIM = 768
 # which is why the chunker sizes chunks to fit — see chunker.py.
 MAX_SEQ_LENGTH = 384
 
-# Small on purpose. Attention memory grows with batch x heads x seq^2, so a batch
-# of 32 full-length chunks costs hundreds of MB of activations for a few percent
-# of throughput. On a 512 MB instance memory is the constraint, not speed.
-DEFAULT_BATCH_SIZE = 8
+# ONE text per model call. Measured in the image on one thread (full-length
+# chunks): batch 1 = 793 ms/chunk at +21 MB peak; batch 2 = 850 ms at +93 MB;
+# batch 8 = 1253 ms at +360 MB. Batching pays off on many cores; on one it only
+# adds padding and cache pressure — slower AND several hundred MB heavier, which
+# on a 512 MB instance is the difference between indexing and being OOM-killed.
+DEFAULT_BATCH_SIZE = 1
 
 
 @lru_cache(maxsize=1)
@@ -66,10 +68,10 @@ def embed(
     tok = _encoder()
     size = batch_size or _batch_size()
 
-    # Batch texts of similar length together. Padding to the longest member is
-    # pure wasted compute, and on a 0.1-CPU slice compute is what a long
-    # document's indexing time is made of. Results are written back by index,
-    # so the caller's order is unaffected.
+    # If batching is configured (EMBED_BATCH_SIZE > 1, for a machine with cores
+    # to spare), group texts of similar length: padding to the longest member is
+    # pure wasted compute. Results are written back by index, so the caller's
+    # order is unaffected.
     order = sorted(range(len(texts)), key=lambda i: len(texts[i]))
     for start in range(0, len(order), size):
         idx = order[start:start + size]

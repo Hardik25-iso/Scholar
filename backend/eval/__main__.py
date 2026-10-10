@@ -428,6 +428,10 @@ def main() -> int:
                    default=settings.query_expansion,
                    help="query expansion strategy (defaults to the CONFIGURED one, so the "
                         "eval measures what ships)")
+    p.add_argument("--rerank-max-tokens", type=int, default=None,
+                   help="override RERANK_MAX_TOKENS (cross-encoder input length)")
+    p.add_argument("--no-rerank", action="store_true",
+                   help="skip the cross-encoder: the fused stage-1 order is the ranking")
     p.add_argument("--json-out", type=Path, default=None,
                    help="also write per-question ranks + summary metrics as JSON, "
                         "so two runs can be diffed question by question")
@@ -438,6 +442,12 @@ def main() -> int:
         return 0
     if args.check:
         return check_labels(load_dataset()[0])
+    # Applied through the settings the product reads, so the eval measures the
+    # same code path a deployment configured this way would run.
+    if args.rerank_max_tokens is not None:
+        settings.rerank_max_tokens = args.rerank_max_tokens
+    if args.no_rerank:
+        settings.rerank_enabled = False
     return run(args.k, args.candidates, dense_only=args.dense_only, use_mmr=args.mmr,
                expansion_mode=args.expansion, json_out=args.json_out)
 

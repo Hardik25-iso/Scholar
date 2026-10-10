@@ -69,6 +69,7 @@ free hosted endpoint — both are shown below, and retrieval and the eval harnes
 git clone https://github.com/Hardik25-iso/Scholar.git && cd Scholar
 python -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+python scripts/fetch_models.py      # the ONNX models (~135 MB), pinned and checksummed
 cp .env.example .env
 ```
 

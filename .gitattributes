@@ -1,0 +1,6 @@
+# Files that end up inside the Linux image must keep LF endings even in a
+# Windows checkout (core.autocrlf=true): a CRLF shebang makes the entrypoint
+# fail with "/bin/sh^M: not found", but only on images built from Windows.
+*.sh          text eol=lf
+Dockerfile    text eol=lf
+render.yaml   text eol=lf

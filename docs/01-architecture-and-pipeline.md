@@ -49,12 +49,13 @@ makes retrieval at query time near-instant.
 | API | **FastAPI** (Python, port 8001) | HTTP endpoints, request validation | async-friendly, Pydantic-native, auto docs |
 | Typing | **Pydantic v2** | validate every API request/response | one schema = validation + serialization |
 | PDF parsing | **PyMuPDF (`fitz`)** | extract text per page | fast, keeps page numbers (needed for citations) |
-| Chunking | **HuggingFace tokenizer** | split text into model-sized windows | counts *real* word-piece tokens, not words |
-| Embeddings | **sentence-transformers `all-mpnet-base-v2`** | text → 768-dim vector | strong general-purpose semantic encoder |
+| Chunking | **HuggingFace `tokenizers`** (the model's own `tokenizer.json`) | split text into model-sized windows | counts *real* word-piece tokens, not words |
+| Embeddings | **`all-mpnet-base-v2` on ONNX Runtime (int8)** | text → 768-dim vector | strong general-purpose semantic encoder; no torch — fits a 512 MB host |
 | Vector store | **FAISS `IndexFlatIP`** | nearest-neighbour search | exact cosine search, no server, fast to ~100k chunks |
-| Reranking | **cross-encoder `ms-marco-MiniLM-L-6-v2`** | re-score top candidates | precision the bi-encoder can't reach |
+| Reranking | **cross-encoder `ms-marco-MiniLM-L-6-v2`** (ONNX Runtime, int8) | re-score top candidates | precision the bi-encoder can't reach |
 | Generation | **Ollama running `gemma3:4b`** | write the grounded answer | free, local, on-device (no API cost) |
-| Persistence | **SQLite + SQLModel** | users, paper metadata | one file, zero server; SQLModel = tables that are Pydantic models |
+| Persistence | **SQLModel on SQLite (local) or Postgres (deployed)** | users, workspaces, papers, which index version is current | SQLModel = tables that are Pydantic models |
+| Library files | **local directory or Supabase Storage** (`blobstore.py`) | originals + immutable index versions | object storage when the host has no persistent disk |
 | Auth | **bcrypt + JWT (httpOnly cookie) + CSRF** | accounts & sessions | standard, secure, cross-origin-safe |
 | Frontend | **React + Vite + TypeScript + Tailwind + react-router** | the workspace UI | fast dev, typed, component-based |
 
@@ -107,13 +108,20 @@ first upload) and appends the chunk metadata to `chunks.json`. Each chunk's
 `faiss_id` is the exact row it occupies in the index, so the vector and its
 metadata stay in lockstep.
 
-Per-user disk layout (`backend/library.py`):
+Per-workspace layout in the blob store (`backend/library.py`, `backend/blobstore.py`):
 ```
-data/users/<user_id>/
-   papers/<paper_id>.pdf     # the original upload (for the in-app viewer)
-   index/index.faiss         # this user's FAISS index — ALL their papers
-   index/chunks.json         # chunk metadata, each tagged with its paper_id
+<workspace_id>/
+   papers/<paper_id>.<ext>          # the original upload (for the in-app viewer)
+   index/<version>/index.faiss      # the workspace's FAISS index — ALL its documents
+   index/<version>/chunks.json      # chunk metadata, each tagged with its paper_id
+   index/<version>/lexical.db       # FTS5 mirror of the same chunks
 ```
+An index is never edited in place: every change publishes a complete new
+`<version>`, and the `WorkspaceIndex` row is switched to it by a
+compare-and-swap in one transaction. Object storage has no atomic multi-file
+write, so this is what stops a reader from seeing a FAISS file from one version
+beside a `chunks.json` from another — and what makes a crash mid-upload a
+no-op. Reads work on a local cached copy of the current version.
 **One index per user** (not one shared index filtered by user) means data never
 mixes between accounts, and "delete my paper" is a clean local rebuild.
 
@@ -189,17 +197,19 @@ citation list; the frontend turns them into clickable superscripts.
 backend/
   parser.py      PDF → per-page text (PyMuPDF)
   chunker.py     text → token-accurate overlapping chunks
-  embedder.py    text → 768-dim L2-normalised vectors (mpnet)
+  onnx_runtime.py  model files, ONNX sessions, tokenizers (truncation/padding OFF by default)
+  embedder.py    text → 768-dim L2-normalised vectors (mpnet, ONNX)
   store.py       FAISS index + chunks.json (build / append / remove_paper)
   retriever.py   stage-1: embed query → FAISS top-k (bi-encoder)
   reranker.py    stage-2: cross-encoder re-scores candidates
   generator.py   grounding prompt, generate() + stream_answer() + condense_question()
-  library.py     per-user index: index_pdf / get_retriever / delete_paper_data
+  library.py     per-workspace versioned index: index_document / get_retriever / delete_paper_data
+  blobstore.py   where files live: local directory or Supabase Storage
   papers.py      routes: upload / list / delete / serve-file
   api.py         app wiring, /ask + /ask/stream, _resolve_and_retrieve
   auth.py        register/login/logout/me, cookies, CSRF, get_current_user
   security.py    bcrypt hashing + JWT encode/decode
-  db.py          SQLite engine + session dependency
+  db.py          engine (SQLite or Postgres) + session dependency
   db_models.py   SQLModel tables: User, Paper
   models.py      Pydantic API models: Chunk, Citation, Answer, AskRequest, ...
   config.py      env-loaded settings (pydantic-settings)

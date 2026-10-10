@@ -11,6 +11,9 @@ data/
 
 # Local Python environment (wrong platform, and huge).
 .venv/
+.venv-*/
+# Fetched inside the image by scripts/fetch_models.py; never copied in.
+models/
 __pycache__/
 *.pyc
 .pytest_cache/
@@ -25,6 +28,9 @@ frontend/dist/
 .claude/
 backend/tests/
 backend/eval/
+scripts/*
+!scripts/fetch_models.py
+docs/
 refferences/
 *.md
 !README.md

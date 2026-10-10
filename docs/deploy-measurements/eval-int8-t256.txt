@@ -1,0 +1,54 @@
+Indexing 6 document(s)...
+  indexed distractor_agreement_b: 5 chunks
+  indexed distractor_policy: 4 chunks
+  indexed distractor_retail_2col: 1 chunks
+  indexed market_brief_2col: 1 chunks
+  indexed rag_paper: 60 chunks
+  indexed sample_agreement: 5 chunks
+  76 chunks total
+
+  retrieving 5 of 76 chunks across 6 documents (1 in 15)
+  NOTE: a real professional library is thousands of chunks. These numbers
+        are an optimistic ceiling, not a product metric.
+
+========================================================================
+RETRIEVAL — HYBRID (dense + lexical, RRF)  [expansion: none]  [mmr: off]
+k=5  candidates=20  n=51 questions over 76 chunks
+========================================================================
+  retriever: dense  only        hit@20  98.0%   MRR 0.705
+  retriever: lexical only       hit@20  96.1%   MRR 0.803
+  stage 1 (shortlist,  top 20)   hit@20  98.0%   MRR 0.793
+  stage 2 (reranked,   top 5)    hit@5   88.2%   MRR 0.743   hit@1  64.7%
+  redundancy (mean pairwise token overlap within the top 5): 0.1451
+    lower is better — it is slots spent on repeated text rather than new evidence.
+
+  by question kind (after reranking):
+    kind           hit@5     MRR   of max  parts   n
+    comparative    60.0%   0.250    50.0%    2.0   5
+    exact         100.0%   0.811    81.1%    1.0   19
+    layout        100.0%   1.000   100.0%    1.0   7
+    multihop       66.7%   0.667   133.3%    2.0   3
+    semantic       90.9%   0.750    75.0%    1.0   11
+    table         100.0%   1.000   100.0%    1.0   4
+    vocabulary      0.0%   0.000     0.0%    1.0   2
+
+    'of max' is the share of ACHIEVABLE ranking quality reached. A question
+    needing evidence from N passages cannot complete before rank N, so its
+    best possible MRR is 1/N — comparing raw MRR across kinds with different
+    'parts' counts compares different ceilings and means nothing.
+    Above 100% means the labelled parts turned out to share one passage, so
+    the question was not multi-part for retrieval. That is worth knowing:
+    it means the label, not the retriever, was describing the difficulty.
+
+  6 miss(es) — the evidence never reached the model:
+    [vocabulary] rag-04  What optimizer is used to train the model?
+    [semantic] msa-02  Does this agreement renew automatically, and what notice is needed to stop it?
+    [vocabulary] msa-06  What is the uptime commitment and what happens if it is missed?
+    [multihop] hop-02  How long is the initial term and how much notice stops it renewing?
+    [comparative] cmp-01  Compare the renewal terms of the two agreements — how much notice does each need?
+    [comparative] cmp-02  Which agreement has the higher availability commitment?
+
+  per-question results written to docs\deploy-measurements\eval-int8-t256.json
+
+  refusal probes: 5 defined, not run (needs a live LLM — see the module docstring)
+====================================================================

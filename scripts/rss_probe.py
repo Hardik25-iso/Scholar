@@ -158,9 +158,12 @@ def _proc_peak() -> dict[str, float]:
     Docker Desktop VM) exposes no cgroup memory.peak, so VmHWM is the number.
     """
     script = "\n".join([
-        "import glob",
+        "import glob, os",
         "for p in glob.glob('/proc/[0-9]*'):",
         "    try:",
+        # This one-liner's own command line contains the search string, so
+        # skip itself — otherwise it reports its own ~14 MB.
+        "        if p.endswith('/' + str(os.getpid())): continue",
         "        if b'bin/uvicorn' in open(p + '/cmdline', 'rb').read():",
         "            print(open(p + '/status').read())",
         "    except OSError:",
@@ -254,6 +257,8 @@ def main() -> int:
     p.add_argument("--cpus", default="0.1")
     p.add_argument("--max-pages", type=int, default=75)
     p.add_argument("--skip-big", action="store_true", help="skip the MAX_PAGES document")
+    p.add_argument("--env", action="append", default=[], metavar="KEY=VALUE",
+                   help="extra/overriding container environment (repeatable)")
     p.add_argument("--questions", type=int, default=len(QUESTIONS),
                    help="how many of the fixed questions to ask (each can take a while at 0.1 CPU)")
     args = p.parse_args()
@@ -269,13 +274,16 @@ def main() -> int:
         "RETRIEVER_CACHE_SIZE": "2", "INDEX_IN_BACKGROUND": "true", "OCR_ENABLED": "false",
         "COOKIE_SECURE": "false", "ASK_RATE_LIMIT_PER_HOUR": "1000",
     }
+    for item in args.env:
+        key, _, value = item.partition("=")
+        env[key] = value
     flags = [f"--memory={args.memory}", f"--memory-swap={args.memory}", f"--cpus={args.cpus}",
              "-p", f"{PORT}:8001", "--add-host", "host.docker.internal:host-gateway"]
     for k, v in env.items():
         flags += ["-e", f"{k}={v}"]
 
     result: dict = {"image": args.image, "limits": {"memory": args.memory, "cpus": args.cpus},
-                    "max_pages": args.max_pages}
+                    "max_pages": args.max_pages, "env_overrides": args.env}
     sampler = MemorySampler()
     failure = None
     try:

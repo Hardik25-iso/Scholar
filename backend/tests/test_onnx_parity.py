@@ -161,3 +161,30 @@ def test_int8_stays_close_to_torch(monkeypatch):
     # what a broken port produces (wrong pooling or padding lands near 0.3).
     _check(monkeypatch, "int8", min_cosine=0.80, logit_tol=None, min_spearman=0.80,
            min_synthetic_median=0.80)
+
+
+def test_concurrent_first_use_builds_one_session(monkeypatch):
+    """The warm-up thread and the first request reach session() together.
+    Each building its own copy would hold two 120 MB models at once — the
+    measured cause of a 513 MB peak on a 512 MB instance."""
+    import threading
+    import time
+
+    built = []
+
+    def slow_build(model, precision):
+        built.append(model)
+        time.sleep(0.2)                       # a model load takes a while
+        return object()
+
+    monkeypatch.setattr(onnx_runtime, "_sessions", {})
+    monkeypatch.setattr(onnx_runtime, "_build_session", slow_build)
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(onnx_runtime.session("m", "int8")))
+               for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(built) == 1
+    assert len({id(r) for r in results}) == 1

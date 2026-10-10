@@ -1,0 +1,69 @@
+{
+  "image": "scholar:onnx",
+  "limits": {
+    "memory": "512m",
+    "cpus": "0.1"
+  },
+  "max_pages": 30,
+  "env_overrides": [
+    "RERANK_ENABLED=false",
+    "MAX_CHUNKS_PER_DOC=60"
+  ],
+  "boot_to_listening_s": 31.6,
+  "boot_to_models_ready_s": 62.3,
+  "index_attention": {
+    "status": "done",
+    "error": null,
+    "n_chunks": 36,
+    "upload_returned_s": 1.0,
+    "seconds": 167.07
+  },
+  "ask_warm": {
+    "n": 10,
+    "p50_s": 0.4,
+    "p95_s": 0.6,
+    "max_s": 0.6,
+    "first_s": 0.6
+  },
+  "index_max_pages": {
+    "status": "done",
+    "error": null,
+    "n_chunks": 30,
+    "upload_returned_s": 0.1,
+    "seconds": 167.38
+  },
+  "reject_over_limit": {
+    "status": "failed",
+    "error": "this document has 31 pages; this server indexes at most 30",
+    "n_chunks": 0,
+    "upload_returned_s": 0.11,
+    "seconds": 2.3
+  },
+  "peak_before_restart": {
+    "VmHWM_mib": 513.5,
+    "VmRSS_mib": 355.4,
+    "RssAnon_mib": 313.2
+  },
+  "ask_cold": {
+    "n": 3,
+    "p50_s": 0.49,
+    "p95_s": 13.31,
+    "max_s": 13.31,
+    "first_s": 13.31
+  },
+  "peak_after_cold_ask": {
+    "VmHWM_mib": 480.0,
+    "VmRSS_mib": 480.0,
+    "RssAnon_mib": 407.7
+  },
+  "docker_stats_peak_mib_by_phase": {
+    "boot": 454.8,
+    "index_attention": 500.7,
+    "ask": 351.8,
+    "index_max_pages": 381.1,
+    "reject_over_limit": 351.4,
+    "cold_ask": 414.5
+  },
+  "oom_killed": false,
+  "logs_tail": "INFO:     127.0.0.1:34990 - \"GET /livez HTTP/1.1\" 200 OK\nINFO:     172.17.0.1:40132 - \"POST /auth/login HTTP/1.1\" 200 OK\nINFO:     172.17.0.1:40132 - \"POST /ask HTTP/1.1\" 200 OK\nINFO:     172.17.0.1:40132 - \"POST /ask HTTP/1.1\" 200 OK\nINFO:     172.17.0.1:40132 - \"POST /ask HTTP/1.1\" 200 OK"
+}

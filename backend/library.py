@@ -483,24 +483,47 @@ def index_document(workspace_id: int, doc_path: Path, paper_id: str) -> int:
     configured limit is exceeded.
     """
     with _indexing:
-        # The expensive part happens with no lock held and no index touched:
-        # a concurrent question, or another workspace's write, is never
-        # blocked behind a long document's embedding.
-        pages = extract_pages(doc_path, max_pages=settings.max_pages or None)
-        chunks = chunk_pages(pages, paper_id, unit=unit_for(doc_path))
-        _check_limits(chunks)
-        if not chunks:
-            return 0
-        vectors = embed([c.embed_text for c in chunks], progress=False)
+        try:
+            # The expensive part happens with no lock held and no index
+            # touched: a concurrent question, or another workspace's write, is
+            # never blocked behind a long document's embedding.
+            pages = extract_pages(doc_path, max_pages=settings.max_pages or None)
+            chunks = chunk_pages(pages, paper_id, unit=unit_for(doc_path))
+            _check_limits(chunks)
+            if not chunks:
+                return 0
+            vectors = embed([c.embed_text for c in chunks], progress=False)
 
-        def add(work: Path) -> None:
-            # Both stores are written into the same version together, so they
-            # cannot drift apart.
-            append_to_store(chunks, vectors, work)
-            lexical.index_chunks(chunks, work)
+            def add(work: Path) -> None:
+                # Both stores are written into the same version together, so
+                # they cannot drift apart.
+                append_to_store(chunks, vectors, work)
+                lexical.index_chunks(chunks, work)
 
-        _publish(workspace_id, add)
-        return len(chunks)
+            _publish(workspace_id, add)
+            return len(chunks)
+        finally:
+            _release_memory()
+
+
+def _release_memory() -> None:
+    """Hand freed heap back to the OS after an indexing run (glibc only).
+
+    Parsing and embedding a document allocate and free hundreds of MB of small
+    objects. glibc keeps freed memory in its arenas for reuse, so without this
+    the process's footprint ratchets up to the largest document it has ever
+    indexed and stays there — on a 512 MB instance, the NEXT document is then
+    the one that gets the process killed. A no-op anywhere without glibc.
+    """
+    import gc
+
+    gc.collect()
+    try:
+        import ctypes
+
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass
 
 
 def delete_paper_data(workspace_id: int, paper_id: str) -> None:

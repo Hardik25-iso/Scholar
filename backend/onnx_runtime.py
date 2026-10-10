@@ -30,6 +30,7 @@ at 128 tokens. Loaded as-is, every chunk would be cut to a third of its length
 with no error. Callers therefore always get a tokenizer with both DISABLED and
 must opt in to exactly what they want — see `tokenizer()`.
 """
+import threading
 from functools import lru_cache
 from pathlib import Path
 
@@ -74,9 +75,31 @@ def _require(path: Path) -> Path:
     return path
 
 
-@lru_cache(maxsize=4)
+_sessions: dict[tuple[str, str], ort.InferenceSession] = {}
+_sessions_lock = threading.Lock()
+
+
 def session(model: str, model_precision: str) -> ort.InferenceSession:
-    """One InferenceSession per (model, precision), built on first use."""
+    """One InferenceSession per (model, precision), built on first use.
+
+    Built under a lock, NOT with lru_cache: lru_cache does not lock, so when
+    the start-up warm-up thread and the first request both miss the cache,
+    each builds its own session — two copies of a 120 MB model at once. That
+    was the measured cause of a 513 MB peak on a 512 MB instance. A lock held
+    across a multi-second model load is fine here: nothing can answer without
+    the model anyway, and the second caller simply waits for the first's copy.
+    """
+    key = (model, model_precision)
+    found = _sessions.get(key)
+    if found is not None:
+        return found
+    with _sessions_lock:
+        if key not in _sessions:
+            _sessions[key] = _build_session(model, model_precision)
+        return _sessions[key]
+
+
+def _build_session(model: str, model_precision: str) -> ort.InferenceSession:
     path = _require(models_dir() / model / _MODEL_FILES[model_precision])
     options = ort.SessionOptions()
     options.intra_op_num_threads = 1

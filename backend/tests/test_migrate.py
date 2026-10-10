@@ -19,6 +19,7 @@ from backend.db import engine
 from backend.db_models import Membership, Paper, User, Workspace
 
 
+
 def _legacy_library(user_id: int, paper_id: str = "contract") -> Path:
     """Write a library where the pre-workspace code would have put it."""
     root = library.LEGACY_DATA_ROOT / str(user_id)
@@ -36,6 +37,8 @@ def _legacy_library(user_id: int, paper_id: str = "contract") -> Path:
 
 @pytest.fixture
 def legacy_user(client):
+    if engine.dialect.name != "sqlite":
+        pytest.skip("legacy rows (workspace_id=0) cannot exist under Postgres's foreign keys")
     """A user whose library is in the OLD location and has no workspace."""
     with Session(engine) as session:
         user = User(email="legacy@example.com", hashed_password="x")
@@ -213,3 +216,14 @@ def test_add_missing_columns_is_idempotent(legacy_user):
     guard has to actually work — this is what makes re-running safe."""
     assert migrate.add_missing_columns(dry_run=False) == []
     assert migrate.add_missing_columns(dry_run=False) == []
+
+
+def test_migrate_on_a_fresh_postgres_is_a_clean_no_op(client):
+    """A new deployment starts on Postgres with no legacy data. Running the
+    migration there must succeed and change nothing — on any database."""
+    from backend.migrate import migrate
+
+    assert migrate(dry_run=True)
+    actions = migrate(dry_run=False)
+    assert not any(a.startswith("ALTER TABLE") for a in actions)
+    assert "0 user(s) to migrate" in actions

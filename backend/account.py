@@ -15,7 +15,6 @@ them, are both worse than telling someone to hand over ownership first.
 import io
 import json
 import logging
-import shutil
 import tarfile
 from datetime import datetime, timezone
 
@@ -148,6 +147,13 @@ def delete_account(session: Session, user: User) -> None:
         raise DeletionBlocked(", ".join(w.name for w in blocked))
 
     user_id = user.id
+    # Released before any workspace is deleted: the user row points at its
+    # current workspace, and Postgres enforces that reference (SQLite does not,
+    # which is how deleting the workspace first went unnoticed).
+    user.current_workspace_id = None
+    session.add(user)
+    session.flush()
+
     memberships = session.exec(
         select(Membership).where(Membership.user_id == user_id)
     ).all()
@@ -169,10 +175,7 @@ def delete_account(session: Session, user: User) -> None:
             continue
 
         # Nobody else is in it, so the whole library goes — files first.
-        for directory in (library.workspace_index_dir(workspace.id),
-                          library.workspace_papers_dir(workspace.id)):
-            shutil.rmtree(directory, ignore_errors=True)
-        library.invalidate(workspace.id)
+        library.delete_workspace_data(workspace.id, session)
 
         for paper in session.exec(
             select(Paper).where(Paper.workspace_id == workspace.id)
@@ -186,7 +189,15 @@ def delete_account(session: Session, user: User) -> None:
             select(Invitation).where(Invitation.workspace_id == workspace.id)
         ).all():
             session.delete(invitation)
+        # The library's audit trail goes with the library — including entries
+        # from members who have since left, which would otherwise still
+        # reference the workspace being deleted.
+        for entry in session.exec(
+            select(AnswerLog).where(AnswerLog.workspace_id == workspace.id)
+        ).all():
+            session.delete(entry)
         session.delete(membership)
+        session.flush()         # children first, so the workspace has no referents
         session.delete(workspace)
 
     # Rows keyed to the person rather than to a workspace.

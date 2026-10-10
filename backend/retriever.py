@@ -22,6 +22,9 @@ class Retriever:
     def __init__(self, store_dir: str | Path = DEFAULT_STORE) -> None:
         # Load the index + chunk metadata a single time; reused for every query.
         self.index, self.chunks = load(store_dir)
+        # Kept so lexical search and the audit fingerprint read the SAME index
+        # version this retriever was loaded from — see library.get_retriever.
+        self.store_dir = Path(store_dir)
         # Chunk metadata addressed the way every other component identifies a
         # passage. chunks.json is the single source of truth for the audit
         # fields, so anything that finds a passage some other way (lexical

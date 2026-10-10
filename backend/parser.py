@@ -365,12 +365,31 @@ def unit_for(doc_path: str | Path) -> str:
     return UNITS.get(Path(doc_path).suffix.lower(), UNIT_PAGE)
 
 
-def extract_pages(doc_path: str | Path) -> list[str]:
+class DocumentTooLarge(ValueError):
+    """The document exceeds a configured page or passage limit."""
+
+
+def pdf_page_count(path: str | Path) -> int:
+    """Pages in a PDF, read from its page tree — no text is extracted."""
+    doc = fitz.open(str(path))
+    try:
+        return doc.page_count
+    finally:
+        doc.close()
+
+
+def extract_pages(doc_path: str | Path, max_pages: int | None = None) -> list[str]:
     """Return the document's text, one entry per page-like unit (0-indexed).
 
     Raises UnsupportedDocument for an extension with no extractor. Anything the
     underlying library raises on a corrupt file propagates — the upload route
     turns that into a 422 and rolls the stored file back.
+
+    `max_pages` is checked BEFORE extraction for a PDF, from the page count
+    alone: an over-limit document is refused in milliseconds instead of after
+    minutes of parsing it was never going to be indexed for. The other formats
+    have no cheap count, so their units are checked after extraction (which,
+    for them, is fast — the expensive part is embedding, which never starts).
     """
     path = Path(doc_path)
     extractor = EXTRACTORS.get(path.suffix.lower())
@@ -379,4 +398,13 @@ def extract_pages(doc_path: str | Path) -> list[str]:
             f"unsupported file type '{path.suffix}' "
             f"(supported: {', '.join(sorted(SUPPORTED_EXTENSIONS))})"
         )
-    return extractor(path)
+    if max_pages and path.suffix.lower() == ".pdf":
+        n = pdf_page_count(path)
+        if n > max_pages:
+            raise DocumentTooLarge(f"this document has {n} pages; this server indexes at most {max_pages}")
+    pages = extractor(path)
+    if max_pages and len(pages) > max_pages:
+        raise DocumentTooLarge(
+            f"this document has {len(pages)} {unit_for(path)}s; this server indexes at most {max_pages}"
+        )
+    return pages

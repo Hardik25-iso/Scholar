@@ -13,6 +13,11 @@ from backend import backup, library
 from backend.backup import BackupError
 from backend.tests.conftest import csrf, workspace_id
 
+from backend.tests.conftest import requires_sqlite
+
+# The backup tool archives a SQLite file; on Postgres it refuses, by design.
+pytestmark = requires_sqlite
+
 
 def _upload(client: TestClient, data: bytes, name: str = "paper.pdf"):
     return client.post("/papers", headers=csrf(client),

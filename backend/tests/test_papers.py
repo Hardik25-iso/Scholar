@@ -108,7 +108,7 @@ def test_corrupt_pdf_leaves_no_orphan_on_disk(alice: TestClient):
 def test_failed_upload_does_not_create_an_index(alice: TestClient):
     ws = workspace_id(alice)
     _upload(alice, "fake.pdf", b"not a real pdf at all")
-    assert not (library.workspace_index_dir(ws) / "index.faiss").exists()
+    assert library.current_index_dir(ws) is None
 
 
 # ——— real indexing ———
@@ -149,7 +149,7 @@ def test_a_scanned_pdf_indexes_and_is_retrievable(alice: TestClient, scanned_pdf
     assert job["status"] == "done", job
     assert job["n_chunks"] > 0
 
-    _, chunks = load(library.workspace_index_dir(ws))
+    _, chunks = load(library.current_index_dir(ws))
     text = " ".join(" ".join(c.text.split()) for c in chunks)
     assert "Force Majeure" in text
 
@@ -221,7 +221,7 @@ def test_a_table_is_retrievable_with_its_column_labels(alice: TestClient, xlsx_b
 
     ws = workspace_id(alice)
     _upload(alice, "fees.xlsx", xlsx_bytes)
-    _, chunks = load(library.workspace_index_dir(ws))
+    _, chunks = load(library.current_index_dir(ws))
     text = "\n".join(c.text for c in chunks)
     assert "| Tier | Included Seats | Annual Fee |" in text
     assert "| Enterprise | unlimited | 960000 |" in text
@@ -303,7 +303,7 @@ def test_delete_removes_the_row_the_file_and_the_index(alice: TestClient, text_p
     assert alice.get(f"/papers/{paper_id}/file").status_code == 404
     assert list(library.workspace_papers_dir(ws).glob("*.pdf")) == []
     # Nothing left in the library, so the store files are removed entirely.
-    assert not (library.workspace_index_dir(ws) / "index.faiss").exists()
+    assert library.current_index_dir(ws) is None
 
 
 @pytest.mark.slow
@@ -318,7 +318,7 @@ def test_deleting_one_of_two_papers_keeps_the_other_indexed(alice: TestClient, t
 
     alice.delete(f"/papers/{first['id']}", headers=csrf(alice))
 
-    index, chunks = load(library.workspace_index_dir(ws))
+    index, chunks = load(library.current_index_dir(ws))
     assert index.ntotal == len(chunks)
     assert {c.paper_id for c in chunks} == {"second"}
     assert [c.faiss_id for c in chunks] == list(range(len(chunks)))

@@ -58,6 +58,58 @@ jobs:
           python -m backend.eval --build-corpus
           python -m backend.eval --check
 
+  # The deployed database is Postgres (Neon); local development is SQLite. The
+  # two disagree in ways only a real Postgres shows: enforced foreign keys,
+  # reserved words (`user`), booleans that will not compare to 1, timestamps
+  # converted through the SESSION time zone. The server here deliberately runs
+  # a non-UTC zone, so a missing UTC pin shows up as wrong expiries.
+  backend-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: scholar_test
+          TZ: Asia/Kolkata
+          PGTZ: Asia/Kolkata
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d scholar_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      SECRET_KEY: ci-only-secret-not-used-anywhere-real
+      TEST_DATABASE_URL: postgresql+psycopg://postgres:ci@localhost:5432/scholar_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Use a non-UTC server time zone
+        run: >-
+          psql "postgresql://postgres:ci@localhost:5432/scholar_test"
+          -c "ALTER DATABASE scholar_test SET timezone TO 'Asia/Kolkata'"
+
+      - name: Cache ONNX models
+        uses: actions/cache@v4
+        with:
+          path: models
+          key: onnx-${{ hashFiles('scripts/fetch_models.py') }}
+
+      - name: Fetch ONNX models
+        run: python scripts/fetch_models.py models --precision int8
+
+      - name: Tests against Postgres
+        run: pytest
+
   frontend:
     runs-on: ubuntu-latest
     defaults:

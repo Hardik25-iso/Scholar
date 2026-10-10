@@ -8,6 +8,7 @@ proves membership before the route body runs. A document is visible to everyone
 in its workspace and invisible outside it — so the check is "are you a member",
 not "did you upload this". Deletion is narrower: see delete_paper.
 """
+import tempfile
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
@@ -16,11 +17,12 @@ from sqlmodel import Session, select
 
 from backend import library
 from backend.auth import get_current_user, require_csrf
+from backend.config import settings
 from backend.db import get_session
 from backend.db_models import (
     JOB_QUEUED, JOB_RUNNING, ROLE_OWNER, IndexJob, Paper, User, Workspace,
 )
-from backend.indexing import run_index_job
+from backend.indexing import run_index_job, submit
 from backend.jobs import enqueue_index_job
 from backend.models import IndexJobPublic, PaperPublic
 from backend.parser import SUPPORTED_EXTENSIONS
@@ -29,7 +31,13 @@ from backend.workspaces import get_current_workspace, require_membership
 
 router = APIRouter(prefix="/papers", tags=["papers"])
 
-MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB cap — sane for a research document
+# The cap is configured (MAX_UPLOAD_MB): 20 MB locally, lower on a small host,
+# where it bounds both what is buffered and how long indexing can take.
+_READ_BLOCK = 1 << 20
+
+
+def _max_upload_bytes() -> int:
+    return settings.max_upload_mb * 1024 * 1024
 
 # Served back to the browser on GET /{id}/file. The office formats are
 # downloads, not renderable documents, so only PDF and text open in place.
@@ -61,6 +69,13 @@ def _unique_paper_id(session: Session, workspace_id: int, stem: str) -> str:
     while f"{base}-{n}" in taken:
         n += 1
     return f"{base}-{n}"
+
+
+@router.get("/limits")
+def upload_limits() -> dict[str, int]:
+    """What this server will accept, so the upload screen states the real limits
+    rather than a number hard-coded into the frontend. 0 means "no limit"."""
+    return {"max_upload_mb": settings.max_upload_mb, "max_pages": settings.max_pages}
 
 
 @router.get("/jobs/{job_id}", response_model=IndexJobPublic)
@@ -128,22 +143,34 @@ async def upload_paper(
             status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             f"unsupported file type — accepted: {', '.join(sorted(SUPPORTED_EXTENSIONS))}",
         )
-    data = await file.read()
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "file exceeds 20 MB limit")
-    if not data:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "empty file")
+    # Streamed to a temp file a block at a time, refusing as soon as the cap is
+    # passed — never holding the whole upload in memory, which on a 512 MB
+    # instance is not a nicety.
+    limit = _max_upload_bytes()
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as spool:
+        received = Path(spool.name)
+        size = 0
+        while block := await file.read(_READ_BLOCK):
+            size += len(block)
+            if size > limit:
+                spool.close()
+                received.unlink(missing_ok=True)
+                raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                                    f"file exceeds {settings.max_upload_mb} MB limit")
+            spool.write(block)
+    try:
+        if size == 0:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "empty file")
 
-    stem = Path(name).stem
-    paper_id = _unique_paper_id(session, workspace.id, stem)
+        stem = Path(name).stem
+        paper_id = _unique_paper_id(session, workspace.id, stem)
 
-    # The file is stored before the job is queued, because the job refers to it
-    # by path. A stored file with no job would be an orphan, so the two are
-    # written in the order that makes the job the thing that owns cleanup.
-    papers_dir = library.workspace_papers_dir(workspace.id)
-    papers_dir.mkdir(parents=True, exist_ok=True)
-    doc_path = papers_dir / f"{paper_id}{suffix}"
-    doc_path.write_bytes(data)
+        # The file is stored before the job is queued, because the job refers
+        # to it. A stored file with no job would be an orphan, so the two are
+        # written in the order that makes the job the thing that owns cleanup.
+        library.store_paper(workspace.id, paper_id, suffix, received)
+    finally:
+        received.unlink(missing_ok=True)
 
     job = IndexJob(
         workspace_id=workspace.id, user_id=user.id,
@@ -158,12 +185,21 @@ async def upload_paper(
     # rather than accepting an upload nothing will ever process — and the job
     # records that it happened that way, because the timeout risk came back with
     # it and a silent difference in behaviour is the kind that bites at 2am.
+    #
+    # INDEX_IN_BACKGROUND is the middle way for a host with no queue: the same
+    # job runs on this process's single background indexer, so the upload
+    # returns at once and the browser polls. `ran_inline` still records "no
+    # queue — this process did the work", which is the fact that matters when
+    # reading the log: the work dies with the process.
     if not await enqueue_index_job(job.id):
         job.ran_inline = True
         session.add(job)
         session.commit()
-        run_index_job(job.id)
-        session.refresh(job)
+        if settings.index_in_background:
+            submit(job.id)
+        else:
+            run_index_job(job.id)
+            session.refresh(job)
 
     return job
 
@@ -199,7 +235,7 @@ def get_paper_file(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "paper not found")
     path = library.stored_path(workspace.id, paper.paper_id)
     if path is None or not path.exists():
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "file no longer on disk")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "file no longer stored")
     suffix = path.suffix.lower()
     return FileResponse(
         path,

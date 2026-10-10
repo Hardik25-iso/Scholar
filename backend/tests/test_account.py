@@ -128,7 +128,7 @@ def test_deleting_takes_the_files_off_disk(alice: TestClient, text_pdf: bytes):
     alice.post("/auth/delete", json={"password": GOOD["password"]}, headers=csrf(alice))
 
     assert not list(papers_dir.glob("*")) if papers_dir.exists() else True
-    assert not (library.workspace_index_dir(ws) / "index.faiss").exists()
+    assert library.current_index_dir(ws) is None
     with Session(engine) as session:
         assert session.exec(select(Paper)).all() == []
         assert session.exec(select(Workspace)).all() == []

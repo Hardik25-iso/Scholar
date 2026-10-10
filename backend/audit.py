@@ -127,13 +127,16 @@ def list_for_workspace(
     )
 
 
-def reproducible_against(entry: AnswerLog, index_dir: str | Path) -> bool:
+def reproducible_against(entry: AnswerLog, current_fingerprint: str) -> bool:
     """Whether the library is still in the state this answer was drawn from.
 
     False does not mean the answer was wrong — it means re-running the question
     today would search a different corpus, so any difference in the result is
     explained by the library changing rather than by the system being
     inconsistent. Saying which of those it is, is the whole point.
+
+    `current_fingerprint` is the live index's, from library.current_fingerprint
+    — the same sha256-of-chunks.json value this module records, so entries
+    written before versioned storage still compare correctly.
     """
-    current, _ = index_fingerprint(index_dir)
-    return bool(entry.index_fingerprint) and current == entry.index_fingerprint
+    return bool(entry.index_fingerprint) and current_fingerprint == entry.index_fingerprint

@@ -119,6 +119,9 @@ export default function Workspace() {
     setJob(current);
     // The job can already be terminal when the server has no queue and indexed
     // inline, so this polls only while there is something to wait for.
+    // On a host that sleeps when idle, these polls are ALSO what keeps the
+    // server awake while it indexes in-process — removing or slowing them
+    // would let it sleep mid-job. See the note shown in Library.
     while (current.status === "queued" || current.status === "running") {
       await new Promise((r) => setTimeout(r, POLL_MS));
       current = await getIndexJob(current.id);

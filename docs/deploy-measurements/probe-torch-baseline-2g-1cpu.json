@@ -1,0 +1,65 @@
+{
+  "image": "scholar:torch-baseline",
+  "limits": {
+    "memory": "2g",
+    "cpus": "1"
+  },
+  "max_pages": 25,
+  "boot_to_listening_s": 7.3,
+  "boot_to_models_ready_s": 13.1,
+  "index_attention": {
+    "status": "done",
+    "error": null,
+    "n_chunks": 36,
+    "upload_returned_s": 69.91,
+    "seconds": 69.91
+  },
+  "ask_warm": {
+    "n": 3,
+    "p50_s": 4.03,
+    "p95_s": 4.17,
+    "max_s": 4.17,
+    "first_s": 4.17
+  },
+  "index_max_pages": {
+    "status": "done",
+    "error": null,
+    "n_chunks": 25,
+    "upload_returned_s": 43.23,
+    "seconds": 43.23
+  },
+  "reject_over_limit": {
+    "status": "done",
+    "error": null,
+    "n_chunks": 26,
+    "upload_returned_s": 44.9,
+    "seconds": 44.9
+  },
+  "peak_before_restart": {
+    "VmHWM_mib": 14.4,
+    "VmRSS_mib": 14.2,
+    "RssAnon_mib": 8.4
+  },
+  "ask_cold": {
+    "n": 3,
+    "p50_s": 6.29,
+    "p95_s": 11.31,
+    "max_s": 11.31,
+    "first_s": 11.31
+  },
+  "peak_after_cold_ask": {
+    "VmHWM_mib": 14.3,
+    "VmRSS_mib": 14.1,
+    "RssAnon_mib": 8.4
+  },
+  "docker_stats_peak_mib_by_phase": {
+    "boot": 443.2,
+    "index_attention": 1394.7,
+    "ask": 634.2,
+    "index_max_pages": 1160.2,
+    "reject_over_limit": 1218.6,
+    "cold_ask": 614.2
+  },
+  "oom_killed": false,
+  "logs_tail": "INFO:     172.17.0.1:60588 - \"POST /ask HTTP/1.1\" 200 OK\nINFO:     172.17.0.1:60588 - \"POST /ask HTTP/1.1\" 200 OK\nINFO:     172.17.0.1:60588 - \"POST /ask HTTP/1.1\" 200 OK"
+}

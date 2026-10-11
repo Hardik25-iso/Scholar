@@ -9,24 +9,63 @@ every question token can attend to every chunk token. That joint view judges tru
 relevance far better — but it costs one full model pass PER candidate, so we only
 ever run it on the handful the bi-encoder already shortlisted, not the whole index.
 
-Model: cross-encoder/ms-marco-MiniLM-L-6-v2 — small (~80MB), CPU-fast, trained on
-MS MARCO query/passage relevance. Ships inside sentence-transformers.
+Model: cross-encoder/ms-marco-MiniLM-L-6-v2 — small, CPU-fast, trained on
+MS MARCO query/passage relevance. Run on ONNX Runtime from the model authors'
+own export; the score is the raw logit, exactly as sentence-transformers
+returned it (the model's config sets its activation to Identity, not sigmoid).
 """
-from sentence_transformers import CrossEncoder
+from functools import lru_cache
+
+import numpy as np
+from tokenizers import Tokenizer
 
 from backend import mmr
 from backend.models import Citation
+from backend.onnx_runtime import RERANKER_DIR, session, tokenizer
 
 RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
-_model: CrossEncoder | None = None
+# The model's position-embedding limit. A (question, passage) pair longer than
+# this has its LONGER side trimmed first ("longest_first"), as before.
+MAX_LENGTH = 512
+
+# Pairs scored per model call. Measured in the image on one thread: batch 1 =
+# 140 ms/pair at +25 MB peak; batch 8 = 209 ms/pair at +236 MB. One at a time
+# is both faster and lighter on a single core — see the note in embedder.embed.
+BATCH_SIZE = 1
 
 
-def _get_model() -> CrossEncoder:
-    global _model
-    if _model is None:
-        _model = CrossEncoder(RERANKER_MODEL)
-    return _model
+@lru_cache(maxsize=2)
+def _encoder(max_length: int = MAX_LENGTH) -> Tokenizer:
+    tok = tokenizer(RERANKER_DIR)
+    tok.enable_truncation(min(max_length, MAX_LENGTH), strategy="longest_first")
+    tok.enable_padding(pad_id=tok.token_to_id("[PAD]"), pad_token="[PAD]")
+    return tok
+
+
+def score_pairs(pairs: list[tuple[str, str]], max_length: int = MAX_LENGTH) -> np.ndarray:
+    """Raw relevance logits for (question, passage) pairs. Higher = more relevant.
+
+    `max_length` trims each pair (longer side first) — the main cost lever on a
+    slow CPU, since a pass costs roughly in proportion to its length."""
+    if not pairs:
+        return np.empty(0, dtype=np.float32)
+    sess = session(RERANKER_DIR)
+    tok = _encoder(max_length)
+
+    scores: list[np.ndarray] = []
+    for start in range(0, len(pairs), BATCH_SIZE):
+        # Stripped, as sentence-transformers' CrossEncoder does.
+        batch = [(q.strip(), p.strip()) for q, p in pairs[start:start + BATCH_SIZE]]
+        encodings = tok.encode_batch(batch)
+        feed = {
+            "input_ids": np.array([e.ids for e in encodings], dtype=np.int64),
+            "attention_mask": np.array([e.attention_mask for e in encodings], dtype=np.int64),
+            "token_type_ids": np.array([e.type_ids for e in encodings], dtype=np.int64),
+        }
+        logits = sess.run(None, feed)[0]
+        scores.append(logits[:, 0].astype(np.float32))
+    return np.concatenate(scores)
 
 
 class Reranker:
@@ -46,10 +85,17 @@ class Reranker:
         """
         if not candidates:
             return []
+        # Settings are read HERE, not at import time — see the note below.
+        from backend.config import settings
+
+        if not settings.rerank_enabled:
+            # Stage 1's fused order IS the ranking. A deliberate, measured
+            # trade for a CPU too small to run the cross-encoder in time.
+            return candidates[:top_k]
 
         # Score every (question, passage) pair jointly. Higher = more relevant.
-        pairs = [(question, c.text) for c in candidates]
-        scores = _get_model().predict(pairs)
+        scores = score_pairs([(question, c.text) for c in candidates],
+                             max_length=settings.rerank_max_tokens)
 
         # Attach the stage-2 score to each candidate (keeps the stage-1 cosine too).
         for citation, score in zip(candidates, scores):
@@ -62,13 +108,11 @@ class Reranker:
         # re-orders the cross-encoder's judgement to avoid spending slots on
         # near-duplicate passages. Selecting from `ranked` (not `candidates`)
         # keeps the two paths identical when MMR is off.
-        # Settings are read HERE, not at import time. The Docker build bakes the
-        # models in by importing RERANKER_MODEL from this module, and a build has
-        # no environment — a module-level `settings` would construct Settings(),
-        # fail on the missing SECRET_KEY, and break the image build. A module that
-        # names a model should be importable without a configured deployment.
-        from backend.config import settings
-
+        # Settings are read HERE, not at import time: a module that names a
+        # model should be importable without a configured deployment — a
+        # module-level `settings` would construct Settings() and fail on a
+        # missing SECRET_KEY wherever there is no environment (an image build,
+        # a one-off script).
         if settings.mmr_enabled if use_mmr is None else use_mmr:
             return mmr.select(ranked, k=top_k, lam=settings.mmr_lambda)
         return ranked[:top_k]

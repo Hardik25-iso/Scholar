@@ -34,6 +34,7 @@ from backend.db import engine, get_session, init_db
 from backend.db_models import User, Workspace
 from backend.embedder import embed
 from backend.generator import condense_question, generate, stream_answer, warm_llm
+from backend.indexing import fail_interrupted_jobs
 from backend.models import Answer, AskRequest, Citation
 from backend.papers import router as papers_router
 from backend.ratelimit import ask_limiter
@@ -57,7 +58,7 @@ def _warm_models() -> None:
     log and move on rather than taking the whole app with us.
     """
     try:
-        embed(["warm up the embedder"], progress=False)          # mpnet
+        embed(["warm up the embedder"])          # mpnet
         _reranker.rerank("warm up", [                            # cross-encoder
             Citation(paper_id="_", page=0, chunk_index=0, score=0.0, text="warm up passage")
         ], top_k=1)
@@ -79,13 +80,22 @@ async def lifespan(app: FastAPI):
     init_db()
     # Loud about the one misconfiguration that destroys data without an error:
     # the default library location lives inside the source tree.
-    if not settings.data_root:
+    if settings.storage_backend == "local" and not settings.data_root:
         log.warning(
             "DATA_ROOT is unset — user libraries live in the source tree at %s. "
             "A redeploy that replaces the source will DELETE every library. "
-            "Set DATA_ROOT to a mounted volume before serving real users.",
+            "Set DATA_ROOT to a mounted volume (or STORAGE_BACKEND=supabase) "
+            "before serving real users.",
             library.DATA_ROOT,
         )
+    # With no queue, this process is the only indexer, so any job still marked
+    # queued or running was lost when the previous process stopped. Say so,
+    # instead of leaving it "indexing…" forever. (With a queue, a separate
+    # worker may legitimately own those jobs — leave them alone.)
+    if not settings.redis_url:
+        interrupted = fail_interrupted_jobs()
+        if interrupted:
+            log.warning("%d indexing job(s) were interrupted by a restart; marked failed", interrupted)
     threading.Thread(target=_warm_models, name="warm", daemon=True).start()
     yield
 
@@ -171,6 +181,20 @@ app.include_router(audit_router)
 app.include_router(workspace_router)
 
 
+@app.get("/livez")
+def process_liveness() -> dict[str, str]:
+    """The process is up. Touches nothing — not even the database.
+
+    For a platform health check that polls every few seconds. Pointing that at
+    /healthz would run `SELECT 1` against a serverless Postgres (Neon) forever,
+    which keeps its compute awake and spends the free plan's compute hours on
+    health checks. Nothing is lost by not checking the database here: startup
+    runs init_db() against it, so a deploy with a bad DATABASE_URL never comes
+    up in the first place.
+    """
+    return {"status": "ok", "build": settings.build_sha}
+
+
 @app.get("/healthz")
 def liveness(response: Response) -> dict[str, str]:
     """LIVENESS: is this process able to serve? Deploy gates use this.
@@ -221,7 +245,7 @@ def health(response: Response) -> dict[str, object]:
 
     # Embedder: already loaded by the warm thread; this confirms it can encode.
     try:
-        embed(["health check"], progress=False)
+        embed(["health check"])
         checks["embedder"] = "ok"
     except Exception as exc:  # noqa: BLE001
         checks["embedder"] = f"error: {exc}"
@@ -256,14 +280,15 @@ def ask(
     session: Session = Depends(get_session),
 ) -> Answer:
     ask_limiter.check(str(user.id))
-    query, citations, retrieval_query = _resolve_and_retrieve(workspace.id, request)
+    query, citations, retrieval_query, index_dir = _resolve_and_retrieve(workspace.id, request)
     answer = generate(query, citations)
-    _record(session, user.id, workspace.id, request, query, answer, retrieval_query)
+    _record(session, user.id, workspace.id, request, query, answer, index_dir, retrieval_query)
     return answer
 
 
 def _record(session: Session, user_id: int, workspace_id: int, request: AskRequest,
-            query: str, answer: Answer, retrieval_query: str | None = None) -> None:
+            query: str, answer: Answer, index_dir: Path,
+            retrieval_query: str | None = None) -> None:
     """Log the served answer with its evidence. Never raises — see audit.record.
 
     Both ids are kept: who asked, and which library they asked. In a shared
@@ -272,7 +297,9 @@ def _record(session: Session, user_id: int, workspace_id: int, request: AskReque
     """
     audit.record(
         session, user_id, workspace_id, request, query, answer,
-        index_dir=library.workspace_index_dir(workspace_id),
+        # The version the answer was RETRIEVED from — not whatever is current
+        # by the time this runs, which a concurrent upload may have changed.
+        index_dir=index_dir,
         model=generator.active_model(),
         temperature=generator.active_temperature(),
         retrieval_query=retrieval_query,
@@ -282,7 +309,7 @@ def _record(session: Session, user_id: int, workspace_id: int, request: AskReque
 
 def _resolve_and_retrieve(
     workspace_id: int, request: AskRequest
-) -> tuple[str, list[Citation], str]:
+) -> tuple[str, list[Citation], str, Path]:
     """Condense a follow-up into a standalone query, then run stage 1+2 on it.
 
     Stage 1 is HYBRID: the dense retriever finds passages that mean the right
@@ -294,7 +321,9 @@ def _resolve_and_retrieve(
 
     Returns (query, citations): `query` is what retrieval + generation should use
     (the condensed standalone question for a follow-up, else the original), and
-    `citations` are the reranked sources. Raises 400 if the user has no papers.
+    `citations` are the reranked sources. Also returned: the retrieval query
+    actually searched, and the local directory of the index version searched,
+    which the audit record fingerprints. Raises 400 if the user has no papers.
     """
     retriever = library.get_retriever(workspace_id)
     if retriever is None:
@@ -307,9 +336,11 @@ def _resolve_and_retrieve(
     query = condense_question(request.question, request.history)
     candidates, retrieval_query = shortlist(
         query,
-        library.workspace_index_dir(workspace_id),
+        retriever.store_dir,   # the version this retriever holds — FAISS and FTS5 agree
         retriever,
-        k=request.candidates,
+        # The client may ask for fewer, never more: each candidate is a full
+        # cross-encoder pass, and this is a CPU budget, not a preference.
+        k=min(request.candidates, settings.rerank_candidates),
         papers=request.papers,
         expansion_mode=settings.query_expansion,
     )
@@ -319,7 +350,7 @@ def _resolve_and_retrieve(
     # Generation still receives the user's own question — `query` — since the
     # expansion terms are a retrieval device, not part of what was asked.
     citations = _reranker.rerank(retrieval_query, candidates, top_k=request.k)
-    return query, citations, retrieval_query
+    return query, citations, retrieval_query, retriever.store_dir
 
 
 # Streaming variant of /ask. Retrieval + reranking run up front, so we can send
@@ -336,7 +367,7 @@ def ask_stream(
     session: Session = Depends(get_session),
 ) -> StreamingResponse:
     ask_limiter.check(str(user.id))
-    query, citations, retrieval_query = _resolve_and_retrieve(workspace.id, request)
+    query, citations, retrieval_query, index_dir = _resolve_and_retrieve(workspace.id, request)
 
     def ndjson():
         yield json.dumps({"type": "citations",
@@ -355,7 +386,7 @@ def ask_stream(
         # record is what the user saw, not a second guess at it.
         _record(session, user.id, workspace.id, request, query,
                 Answer(question=query, answer="".join(parts), citations=citations),
-                retrieval_query)
+                index_dir, retrieval_query)
 
     return StreamingResponse(ndjson(), media_type="application/x-ndjson")
 

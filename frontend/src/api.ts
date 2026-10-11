@@ -342,9 +342,20 @@ export interface IndexJob {
   /** Set when status is "failed": the reason the upload could not be indexed. */
   error: string | null;
   n_chunks: number;
-  /** True when no queue was reachable and the work ran inside the request. */
+  /** True when no queue was reachable, so THIS server process does the work —
+   *  and the work dies with it (a redeploy, or a free host sleeping when idle). */
   ran_inline: boolean;
   created_at: string;
+}
+
+/** What the server accepts. 0 means no limit. */
+export interface UploadLimits {
+  max_upload_mb: number;
+  max_pages: number;
+}
+
+export function getUploadLimits(): Promise<UploadLimits> {
+  return request<UploadLimits>("/papers/limits");
 }
 
 export function getIndexJob(id: number): Promise<IndexJob> {

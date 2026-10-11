@@ -21,7 +21,14 @@ import pytest
 # ——— redirect storage BEFORE importing anything from backend ———
 
 _TMP = Path(tempfile.mkdtemp(prefix="scholar-tests-"))
-os.environ["DATABASE_URL"] = f"sqlite:///{(_TMP / 'test.db').as_posix()}"
+# SQLite in the temp dir by default. TEST_DATABASE_URL runs the same suite on
+# Postgres (CI does, against a service container) — accepted only for a
+# database whose name says it is disposable, because every test begins by
+# deleting every row.
+_TEST_DB = os.environ.get("TEST_DATABASE_URL", "")
+if _TEST_DB and "scholar_test" not in _TEST_DB:
+    raise RuntimeError("TEST_DATABASE_URL must name a database containing 'scholar_test'")
+os.environ["DATABASE_URL"] = _TEST_DB or f"sqlite:///{(_TMP / 'test.db').as_posix()}"
 os.environ["SECRET_KEY"] = "test-only-secret-not-used-anywhere-real"
 os.environ["ACCESS_TOKEN_EXPIRE_MINUTES"] = "30"
 
@@ -41,6 +48,8 @@ library.DATA_ROOT = _TMP / "workspaces"
 # below now covers every path the app can write to, so the next one added is
 # caught by a failing assertion rather than by noticing stray files later.
 library.LEGACY_DATA_ROOT = _TMP / "users"
+# Local working copies of index versions and documents (see library.py).
+library.CACHE_ROOT = _TMP / "cache"
 
 # ——— the guard: prove we are not pointed at real data ———
 
@@ -48,6 +57,7 @@ _REPO_DATA = (Path(__file__).resolve().parents[2] / "data").resolve()
 _WRITABLE_ROOTS = {
     "library.DATA_ROOT": library.DATA_ROOT,
     "library.LEGACY_DATA_ROOT": library.LEGACY_DATA_ROOT,
+    "library.CACHE_ROOT": library.CACHE_ROOT,
 }
 
 assert _TMP.resolve() != _REPO_DATA, "temp dir collided with the repo data dir"
@@ -55,7 +65,7 @@ for _name, _root in _WRITABLE_ROOTS.items():
     assert str(_root.resolve()).startswith(str(_TMP.resolve())), (
         f"{_name} escaped the sandbox: {_root}"
     )
-assert str(_TMP.resolve()) in settings.database_url.replace("/", os.sep), (
+assert (_TEST_DB and settings.database_url == _TEST_DB) or     str(_TMP.resolve()) in settings.database_url.replace("/", os.sep), (
     f"DATABASE_URL escaped the sandbox: {settings.database_url}"
 )
 assert not str(engine.url).endswith("scholar.db"), (
@@ -66,6 +76,15 @@ assert not str(engine.url).endswith("scholar.db"), (
 def pytest_sessionfinish(session, exitstatus):
     """Delete the throwaway tree once the whole run is over."""
     shutil.rmtree(_TMP, ignore_errors=True)
+
+
+# Tests of SQLite-era behaviour that cannot exist on Postgres: the pre-workspace
+# migration's legacy rows (workspace_id=0, which a foreign key forbids) and the
+# backup tool (which refuses a non-SQLite database by design).
+requires_sqlite = pytest.mark.skipif(
+    engine.dialect.name != "sqlite",
+    reason="SQLite-only: covers state or tooling that cannot exist on Postgres",
+)
 
 
 # ——— fixtures ———
@@ -111,16 +130,24 @@ def _reset_state() -> None:
     have nothing to do with what they are testing — which makes results depend
     on test ORDER, the least debuggable kind of failure.
     """
+    from sqlalchemy import text
     from sqlmodel import Session, SQLModel, delete
 
     from backend.ratelimit import ask_limiter, upload_limiter
 
     with Session(engine) as session:
-        for table in reversed(SQLModel.metadata.sorted_tables):
-            session.exec(delete(table))
+        if engine.dialect.name == "postgresql":
+            # Postgres enforces foreign keys (SQLite here does not), and user <->
+            # workspace reference each other, so no delete order satisfies them.
+            names = ", ".join(f'"{t.name}"' for t in SQLModel.metadata.sorted_tables)
+            session.exec(text(f"TRUNCATE {names} RESTART IDENTITY CASCADE"))
+        else:
+            for table in reversed(SQLModel.metadata.sorted_tables):
+                session.exec(delete(table))
         session.commit()
     shutil.rmtree(library.DATA_ROOT, ignore_errors=True)
     shutil.rmtree(library.LEGACY_DATA_ROOT, ignore_errors=True)
+    shutil.rmtree(library.CACHE_ROOT, ignore_errors=True)
     library._retrievers.clear()  # the Retriever cache is process-global
     ask_limiter.reset()
     upload_limiter.reset()
@@ -259,3 +286,15 @@ def pptx_bytes(tmp_path: Path) -> bytes:
     path = tmp_path / "deck.pptx"
     prs.save(str(path))
     return path.read_bytes()
+
+
+def papers_dir(workspace: int):
+    """Where the LOCAL blob store keeps a workspace's originals — for asserting
+    on files directly. App code goes through library.stored_path instead."""
+    return library.DATA_ROOT / str(workspace) / "papers"
+
+
+def index_dir(workspace: int):
+    """Local copy of the workspace's CURRENT index version, or None if empty."""
+    state = library.current_index(workspace)
+    return library.local_index_dir(workspace, state.version) if state else None

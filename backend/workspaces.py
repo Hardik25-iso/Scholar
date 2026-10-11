@@ -19,7 +19,7 @@ from backend.auth import get_current_user
 from backend.config import settings
 from backend.db import get_session
 from backend.db_models import (
-    ROLE_MEMBER, ROLE_OWNER, Invitation, Membership, User, Workspace,
+    ROLE_MEMBER, ROLE_OWNER, ROLES, Invitation, Membership, User, Workspace,
 )
 from backend.security import hash_token
 
@@ -138,7 +138,7 @@ def create_invitation(
     invitation = Invitation(
         workspace_id=workspace.id,
         email=email.lower(),
-        role=role if role in (ROLE_OWNER, ROLE_MEMBER) else ROLE_MEMBER,
+        role=role if role in ROLES else ROLE_MEMBER,
         token_hash=hash_token(token),
         invited_by_user_id=inviter.id,
         expires_at=datetime.now(timezone.utc)

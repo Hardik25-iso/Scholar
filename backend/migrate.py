@@ -29,14 +29,13 @@ What it does:
 import argparse
 import shutil
 import sys
-from pathlib import Path
 
 from sqlalchemy import inspect, text
-from sqlmodel import Session, SQLModel, select
+from sqlmodel import Session, select
 
 from backend import library
 from backend.db import engine, init_db
-from backend.db_models import AnswerLog, Membership, Paper, User, Workspace
+from backend.db_models import AnswerLog, Paper, User
 from backend.workspaces import ensure_personal_workspace
 
 
@@ -54,6 +53,10 @@ def add_missing_columns(dry_run: bool) -> list[str]:
     so a database written before workspaces existed keeps its old shape and
     every query mentioning workspace_id fails. These are plain ADD COLUMNs,
     which SQLite performs without rewriting the table.
+
+    Table names are double-quoted because one of them is `user`, a reserved
+    word in Postgres: unquoted, `ALTER TABLE user` is a syntax error there.
+    Double quotes are standard SQL and SQLite accepts them too.
     """
     wanted = {
         "paper": [("workspace_id", "INTEGER NOT NULL DEFAULT 0")],
@@ -76,9 +79,10 @@ def add_missing_columns(dry_run: bool) -> list[str]:
             for name, ddl in columns:
                 if name in present:
                     continue
-                actions.append(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+                statement = f'ALTER TABLE "{table}" ADD COLUMN {name} {ddl}'
+                actions.append(statement)
                 if not dry_run:
-                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+                    conn.execute(text(statement))
     return actions
 
 
@@ -134,9 +138,12 @@ def _plan(actions: list[str]) -> list[str]:
     query names columns that database does not have yet. A dry run that only
     works after the migration is worthless — it is the one command someone runs
     when they are nervous.
+
+    Portable SQL only: `"user"` is quoted (reserved in Postgres) and the
+    boolean is a bound parameter (Postgres will not compare a boolean to 1).
     """
     with engine.connect() as conn:
-        users = list(conn.execute(text("SELECT id, email FROM user ORDER BY id")))
+        users = list(conn.execute(text('SELECT id, email FROM "user" ORDER BY id')))
         actions.append(f"{len(users)} user(s) to migrate")
 
         has_workspaces = "workspace" in inspect(engine).get_table_names()
@@ -145,8 +152,8 @@ def _plan(actions: list[str]) -> list[str]:
             if has_workspaces:
                 row = conn.execute(text(
                     "SELECT w.id FROM workspace w JOIN membership m ON m.workspace_id = w.id "
-                    "WHERE m.user_id = :uid AND w.is_personal = 1"
-                ), {"uid": user_id}).first()
+                    "WHERE m.user_id = :uid AND w.is_personal = :personal"
+                ), {"uid": user_id, "personal": True}).first()
                 existing_id = row[0] if row else None
 
             target = existing_id if existing_id else f"<new for user {user_id}>"

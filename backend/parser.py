@@ -365,12 +365,22 @@ def unit_for(doc_path: str | Path) -> str:
     return UNITS.get(Path(doc_path).suffix.lower(), UNIT_PAGE)
 
 
-def extract_pages(doc_path: str | Path) -> list[str]:
+class DocumentTooLarge(ValueError):
+    """The document exceeds a configured page or passage limit."""
+
+
+def extract_pages(doc_path: str | Path, max_pages: int | None = None) -> list[str]:
     """Return the document's text, one entry per page-like unit (0-indexed).
 
     Raises UnsupportedDocument for an extension with no extractor. Anything the
     underlying library raises on a corrupt file propagates — the upload route
     turns that into a 422 and rolls the stored file back.
+
+    `max_pages` is checked BEFORE extraction for a PDF, from the page count
+    alone: an over-limit document is refused in milliseconds instead of after
+    minutes of parsing it was never going to be indexed for. The other formats
+    have no cheap count, so their units are checked after extraction (which,
+    for them, is fast — the expensive part is embedding, which never starts).
     """
     path = Path(doc_path)
     extractor = EXTRACTORS.get(path.suffix.lower())
@@ -379,4 +389,18 @@ def extract_pages(doc_path: str | Path) -> list[str]:
             f"unsupported file type '{path.suffix}' "
             f"(supported: {', '.join(sorted(SUPPORTED_EXTENSIONS))})"
         )
-    return extractor(path)
+    if max_pages and path.suffix.lower() == ".pdf":
+        with fitz.open(str(path)) as doc:            # reads the page tree only
+            _check_pages(doc.page_count, "page", max_pages)
+        return extractor(path)
+    pages = extractor(path)
+    if max_pages:
+        _check_pages(len(pages), unit_for(path), max_pages)
+    return pages
+
+
+def _check_pages(count: int, unit: str, max_pages: int) -> None:
+    if count > max_pages:
+        raise DocumentTooLarge(
+            f"this document has {count} {unit}s; this server indexes at most {max_pages}"
+        )

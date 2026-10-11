@@ -7,6 +7,11 @@
 # Build:  docker build -t scholar .
 # Run:    docker run -p 8001:8001 --env-file .env -v scholar-data:/data scholar
 #
+# Sized for a 512 MB instance (Render's free tier): no torch — both retrieval
+# models run on ONNX Runtime from int8 files baked in below. See render.yaml
+# for the free-tier configuration and docs/deploy-measurements/ for why each
+# limit is what it is.
+#
 # NOTE ON GENERATION: this image does NOT contain Ollama. A deployed Scholar
 # uses the hosted provider — LLM_PROVIDER=hosted plus LLM_BASE_URL, LLM_MODEL
 # and LLM_API_KEY (a free Groq / Gemini / OpenRouter endpoint works; see
@@ -33,10 +38,16 @@ FROM python:3.12-slim AS app
 
 # PYTHONUNBUFFERED so logs appear in `docker logs` immediately rather than
 # sitting in a buffer; PYTHONDONTWRITEBYTECODE to keep the layer clean.
+#
+# MALLOC_ARENA_MAX=2: glibc otherwise grows a malloc arena per thread and keeps
+# freed memory in each, which on a threadpool server reads as a slow "leak" and
+# is the difference between a peak and a plateau under a hard 512 MB limit.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    HF_HOME=/opt/models
+    MALLOC_ARENA_MAX=2 \
+    MODELS_DIR=/opt/models \
+    CACHE_DIR=/tmp/scholar-cache
 
 WORKDIR /app
 
@@ -47,44 +58,32 @@ RUN apt-get update \
     && apt-get install --no-install-recommends -y tesseract-ocr curl gosu \
     && rm -rf /var/lib/apt/lists/*
 
-# Dependencies before source, so a code change doesn't reinstall torch.
+# Dependencies before source, so a code change doesn't reinstall them. No torch:
+# both models run on onnxruntime, which is a fraction of the size.
 COPY requirements.txt ./
+RUN pip install -r requirements.txt
 
-# CPU-only torch, installed FIRST so the CUDA build is never pulled.
+# Bake the int8 ONNX models and tokenizers into the image (~135 MB).
 #
-# torch arrives transitively via sentence-transformers, and its default wheel
-# bundles the CUDA runtime — cuBLAS alone is 423 MB, and the full set adds
-# several GB of GPU libraries that a CPU-only container can never use. Naming
-# the CPU index here satisfies the dependency before requirements.txt asks for
-# it. Embedding and reranking run on CPU either way; this only removes weight.
-RUN pip install --index-url https://download.pytorch.org/whl/cpu torch \
-    && pip install -r requirements.txt
+# Pinned to a commit and checksummed by the script, so a changed upstream file
+# fails the build instead of silently changing every embedding. Without this
+# the first question after every cold start would download the models inside
+# the request — on a host that sleeps when idle, that is most first questions.
+# Its own layer, before the source, so a code change never re-downloads them.
+COPY scripts/fetch_models.py ./scripts/
+RUN python scripts/fetch_models.py /opt/models --precision int8
 
 COPY backend/ ./backend/
-
-# Bake the embedding, tokenizer and reranker models into the image.
-#
-# Without this the first question after every deploy downloads ~500 MB inside
-# the request, and a cold container looks broken for minutes. Doing it at build
-# time makes image size the cost instead of first-request latency — and means
-# the container needs no model downloads at runtime at all.
-RUN python -c "\
-from sentence_transformers import SentenceTransformer, CrossEncoder; \
-from transformers import AutoTokenizer; \
-from backend.embedder import MODEL_NAME; \
-from backend.reranker import RERANKER_MODEL; \
-SentenceTransformer(MODEL_NAME); \
-AutoTokenizer.from_pretrained(MODEL_NAME, use_fast=True); \
-CrossEncoder(RERANKER_MODEL); \
-print('models baked into image')"
 
 # The built SPA. api.py serves it only when this directory exists, which is why
 # development (where it does not) stays API-only.
 COPY --from=frontend /app/frontend/dist ./frontend/dist
 
-# Libraries and the database live on a mounted volume, never in the image: the
-# default location is inside the source tree, so a redeploy would wipe every
-# user's papers. DATA_ROOT and DATABASE_URL point at /data instead.
+# Defaults for a host WITH a disk: libraries and the database on a mounted
+# volume at /data, never in the image (the default location is inside the
+# source tree, so a redeploy would wipe every user's papers). A host without a
+# persistent disk overrides both — DATABASE_URL=postgresql+psycopg://... and
+# STORAGE_BACKEND=supabase; see render.yaml.
 ENV DATA_ROOT=/data/workspaces \
     DATABASE_URL=sqlite:////data/scholar.db
 
@@ -103,8 +102,8 @@ ENV DATA_ROOT=/data/workspaces \
 # writes fail if the app's user is anything else. Any other host is indifferent
 # to the number, so 1000 is the portable choice.
 RUN useradd --create-home --uid 1000 scholar \
-    && mkdir -p /data \
-    && chown -R scholar:scholar /data /app /opt/models
+    && mkdir -p /data /tmp/scholar-cache \
+    && chown -R scholar:scholar /data /app /opt/models /tmp/scholar-cache
 
 COPY docker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
@@ -122,23 +121,23 @@ ENTRYPOINT ["docker-entrypoint.sh"]
 #
 # DELIBERATELY THE LAST LAYER THAT VARIES. A build arg invalidates its own layer
 # and every layer after it, so declaring this near the top would make each new
-# commit rebuild the model-baking step — turning a ~1 minute cached deploy back
-# into the full ~10 minute download. Everything expensive is already above.
+# commit re-download the models. Everything expensive is already above.
 #
-# Empty by default. On Railway this stays empty and the app falls back to
-# RAILWAY_GIT_COMMIT_SHA, which the platform injects at runtime for free; pass
-# it explicitly anywhere else:
+# Empty by default. On Railway and Render this stays empty and the app falls
+# back to the commit the platform injects at runtime (RAILWAY_GIT_COMMIT_SHA,
+# RENDER_GIT_COMMIT); pass it explicitly anywhere else:
 #   docker build --build-arg GIT_SHA=$(git rev-parse --short HEAD) .
 ARG GIT_SHA=""
 ENV BUILD_SHA=$GIT_SHA
 
 EXPOSE 8001
 
-# The readiness check the app already exposes: it verifies the database, the
-# embedder and the LLM, so an unhealthy container is one that genuinely cannot
-# answer a question — not merely one whose process is alive.
+# Process liveness only: /livez touches nothing. A check polled every 30s that
+# queried the database would keep a serverless Postgres awake around the clock.
+# Nothing is lost — startup runs init_db() against the database before the app
+# accepts a request, so a container with an unreachable database never comes up.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
-    CMD curl -fsS "http://127.0.0.1:${PORT:-8001}/healthz" || exit 1
+    CMD curl -fsS "http://127.0.0.1:${PORT:-8001}/livez" || exit 1
 
 # Shell form, not exec form, so ${PORT} is expanded at runtime.
 #

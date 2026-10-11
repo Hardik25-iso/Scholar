@@ -1,0 +1,58 @@
+name: Supabase keep-alive
+
+# REQUIRED for the Render deployment, not optional.
+#
+# A free Supabase project is PAUSED after a week without activity. A paused
+# project keeps its data, but every request to it fails until someone un-pauses
+# it by hand in the dashboard — so a portfolio deployment left alone for a week
+# would answer every question with an error. This touches the project every
+# three days: one missed run still lands inside the seven-day window.
+#
+# Setup (once): add repository secrets SUPABASE_URL and SUPABASE_SERVICE_KEY
+# (the same values the Render service uses). Then run this workflow by hand
+# once from the Actions tab to prove the secrets work.
+#
+# Two failure modes to know about:
+#   * A failing run emails the repository owner — that is the alarm. Don't
+#     ignore it: you have days, not weeks, before the pause.
+#   * GitHub DISABLES scheduled workflows in a public repository after 60 days
+#     with no repository activity. If the repo goes quiet for two months,
+#     re-enable this from the Actions tab (or push any commit).
+
+on:
+  schedule:
+    - cron: "17 6 */3 * *"   # 06:17 UTC every third day; off the hour to avoid queue spikes
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Touch Supabase Storage and the REST API
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          BUCKET: scholar
+        run: |
+          set -euo pipefail
+          if [ -z "${SUPABASE_URL}" ] || [ -z "${SUPABASE_SERVICE_KEY}" ]; then
+            echo "::error::SUPABASE_URL / SUPABASE_SERVICE_KEY secrets are not set"
+            exit 1
+          fi
+          # Storage: list one entry of the bucket the app uses.
+          curl -fsS --retry 3 --max-time 30 -X POST \
+            "${SUPABASE_URL%/}/storage/v1/object/list/${BUCKET}" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_KEY}" \
+            -H "apikey: ${SUPABASE_SERVICE_KEY}" \
+            -H "Content-Type: application/json" \
+            -d '{"prefix":"","limit":1}' > /dev/null
+          # REST: the OpenAPI root. Both kinds of request, so the project
+          # counts as active whichever one Supabase's inactivity check watches.
+          curl -fsS --retry 3 --max-time 30 \
+            "${SUPABASE_URL%/}/rest/v1/" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_KEY}" \
+            -H "apikey: ${SUPABASE_SERVICE_KEY}" > /dev/null
+          echo "Supabase project touched at $(date -u +%FT%TZ)"

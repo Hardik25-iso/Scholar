@@ -58,9 +58,9 @@ def list_answers(
     workspace: Workspace = Depends(get_current_workspace),
     session: Session = Depends(get_session),
 ) -> list[AnswerLogSummary]:
-    index_dir = library.workspace_index_dir(workspace.id)
+    current = library.current_fingerprint(workspace.id)
     entries = audit.list_for_workspace(session, workspace.id, limit, offset)
-    return [_summary(e, audit.reproducible_against(e, index_dir)) for e in entries]
+    return [_summary(e, audit.reproducible_against(e, current)) for e in entries]
 
 
 @router.get("/{entry_id}", response_model=AnswerLogDetail)
@@ -70,7 +70,7 @@ def get_answer(
     session: Session = Depends(get_session),
 ) -> AnswerLogDetail:
     entry = _visible_entry(entry_id, workspace, session)
-    reproducible = audit.reproducible_against(entry, library.workspace_index_dir(workspace.id))
+    reproducible = audit.reproducible_against(entry, library.current_fingerprint(workspace.id))
     return AnswerLogDetail(
         **_summary(entry, reproducible).model_dump(),
         query=entry.query,
@@ -103,7 +103,7 @@ def export_answer(
     """
     entry = _visible_entry(entry_id, workspace, session)
     citations = _citations(entry)
-    reproducible = audit.reproducible_against(entry, library.workspace_index_dir(workspace.id))
+    reproducible = audit.reproducible_against(entry, library.current_fingerprint(workspace.id))
 
     if format == "json":
         payload = get_answer(entry_id, workspace, session).model_dump(mode="json")

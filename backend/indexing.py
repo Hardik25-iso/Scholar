@@ -7,16 +7,21 @@ fallback, because it is only exercised when something is already wrong.
 
 It takes a job id rather than arguments, so both callers agree on where the
 truth lives: the row. Every exit updates it.
+
+With no queue, the inline path can run on a background thread (`submit`), so
+the upload returns at once and the browser polls the job — the same function,
+just not inside the request.
 """
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from backend import library, parser
 from backend.db import engine
 from backend.db_models import (
-    JOB_DONE, JOB_FAILED, JOB_RUNNING, IndexJob, Paper,
+    JOB_DONE, JOB_FAILED, JOB_QUEUED, JOB_RUNNING, IndexJob, Paper,
 )
 
 log = logging.getLogger(__name__)
@@ -24,6 +29,41 @@ log = logging.getLogger(__name__)
 CORRUPT = "could not read this file (corrupt or not a valid document)"
 NO_TEXT = "no extractable text found"
 SCANNED = " — this looks like a scanned PDF, and OCR is not available on this server"
+GONE = "the uploaded file is no longer stored"
+INTERRUPTED = ("the server restarted while this document was waiting or being indexed "
+               "— please upload it again")
+
+# ONE worker: indexing is CPU- and memory-bound, and two at once on a small
+# instance double peak memory for no gain. Further uploads wait their turn in
+# the queue below, visible to the user as "queued".
+_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="index")
+
+
+def submit(job_id: int) -> None:
+    """Run a job on the background indexer and return immediately."""
+    _executor.submit(run_index_job, job_id)
+
+
+def fail_interrupted_jobs() -> int:
+    """Mark jobs a dead process left queued or running as failed.
+
+    Only valid when THIS process is the only indexer (no queue): a background
+    thread's jobs die with the process — a redeploy, a crash, or a free-tier
+    host putting an idle server to sleep — and without this they would show
+    "indexing…" forever. With a queue, a separate worker may own them, so the
+    caller must not run this.
+    """
+    with Session(engine) as session:
+        stuck = session.exec(
+            select(IndexJob).where(IndexJob.status.in_([JOB_QUEUED, JOB_RUNNING]))
+        ).all()
+        for job in stuck:
+            job.status = JOB_FAILED
+            job.error = INTERRUPTED
+            job.finished_at = datetime.now(timezone.utc)
+            session.add(job)
+        session.commit()
+        return len(stuck)
 
 
 def run_index_job(job_id: int) -> None:
@@ -49,18 +89,23 @@ def run_index_job(job_id: int) -> None:
         session.add(job)
         session.commit()
 
-        doc_path = library.workspace_papers_dir(job.workspace_id) / f"{job.paper_id}{job.suffix}"
         try:
-            if not doc_path.exists():
-                return _fail(session, job, "the uploaded file is no longer on disk")
+            doc_path = library.stored_path(job.workspace_id, job.paper_id)
+            if doc_path is None:
+                return _fail(session, job, GONE)
             n_chunks = library.index_document(job.workspace_id, doc_path, job.paper_id)
-        except Exception as exc:                       # noqa: BLE001 — see docstring
+        except parser.DocumentTooLarge as exc:
+            # A limit, not a broken file — say which one, so the user knows
+            # what to change (split the document) rather than what to blame.
+            _discard(job)
+            return _fail(session, job, str(exc))
+        except Exception:                              # noqa: BLE001 — see docstring
             log.exception("index job %s failed", job_id)
-            doc_path.unlink(missing_ok=True)
+            _discard(job)
             return _fail(session, job, CORRUPT)
 
         if n_chunks == 0:
-            doc_path.unlink(missing_ok=True)
+            _discard(job)
             detail = NO_TEXT
             if job.suffix == ".pdf" and not parser.ocr_available():
                 # Be specific rather than blaming the file: a scanned PDF is a
@@ -82,6 +127,16 @@ def run_index_job(job_id: int) -> None:
         job.finished_at = datetime.now(timezone.utc)
         session.add(job)
         session.commit()
+        library.discard_cached_paper(job.workspace_id, job.paper_id, job.suffix)
+
+
+def _discard(job: IndexJob) -> None:
+    """A document that will not be indexed is not kept: no Paper row will ever
+    point at it, so it would be an orphan nobody can see or delete."""
+    try:
+        library.delete_stored_paper(job.workspace_id, job.paper_id)
+    except Exception:                                  # noqa: BLE001
+        log.warning("could not remove the stored file for job %s", job.id, exc_info=True)
 
 
 def _fail(session: Session, job: IndexJob, reason: str) -> None:

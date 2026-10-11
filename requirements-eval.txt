@@ -1,0 +1,11 @@
+# Eval-only: the torch reference the ONNX port is measured against.
+#
+# NOT installed in the image and not needed to run or test the app. Needed only
+# to re-capture the golden fixtures (scripts/make_golden_fixtures.py) or to rerun
+# the torch arm of the comparison in docs/deploy-measurements/. Install torch
+# from the CPU index first, or pip pulls several GB of CUDA libraries:
+#
+#   pip install --index-url https://download.pytorch.org/whl/cpu torch
+#   pip install -r requirements-eval.txt
+sentence-transformers==3.0.1
+transformers>=4.40,<5.0

@@ -30,13 +30,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r requirements-dev.txt
 
-      # The embedding and reranking models are ~500MB and are downloaded on first
-      # use. Cached on the requirements hash so a normal run never re-downloads.
-      - name: Cache Hugging Face models
+      # The ONNX models (int8, ~135 MB) are pinned and checksummed by
+      # scripts/fetch_models.py; cached on that file's hash, so the cache is
+      # invalidated exactly when a pin changes. Even the fast tier needs the
+      # tokenizers, so this runs before any tests.
+      - name: Cache ONNX models
         uses: actions/cache@v4
         with:
-          path: ~/.cache/huggingface
-          key: hf-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+          path: models
+          key: onnx-${{ hashFiles('scripts/fetch_models.py') }}
+
+      - name: Fetch ONNX models
+        run: python scripts/fetch_models.py models --precision int8
 
       # Split so a plain logic break is reported in seconds, without waiting on
       # the model-loading tier — but both tiers must pass.
@@ -52,6 +57,63 @@ jobs:
         run: |
           python -m backend.eval --build-corpus
           python -m backend.eval --check
+
+  # The deployed database is Postgres (Neon); local development is SQLite. The
+  # two disagree in ways only a real Postgres shows: enforced foreign keys,
+  # reserved words (`user`), booleans that will not compare to 1, timestamps
+  # converted through the SESSION time zone. The server here deliberately runs
+  # a non-UTC zone, so a missing UTC pin shows up as wrong expiries.
+  backend-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: scholar_test
+          TZ: Asia/Kolkata
+          PGTZ: Asia/Kolkata
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d scholar_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      SECRET_KEY: ci-only-secret-not-used-anywhere-real
+      TEST_DATABASE_URL: postgresql+psycopg://postgres:ci@localhost:5432/scholar_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # Same as the SQLite job: without the binary the OCR tests skip, and this
+      # job would quietly cover less than the one it mirrors.
+      - name: Install Tesseract
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Use a non-UTC server time zone
+        run: >-
+          psql "postgresql://postgres:ci@localhost:5432/scholar_test"
+          -c "ALTER DATABASE scholar_test SET timezone TO 'Asia/Kolkata'"
+
+      - name: Cache ONNX models
+        uses: actions/cache@v4
+        with:
+          path: models
+          key: onnx-${{ hashFiles('scripts/fetch_models.py') }}
+
+      - name: Fetch ONNX models
+        run: python scripts/fetch_models.py models --precision int8
+
+      - name: Tests against Postgres
+        run: pytest
 
   frontend:
     runs-on: ubuntu-latest

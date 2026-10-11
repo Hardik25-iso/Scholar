@@ -1,0 +1,122 @@
+# Render Blueprint: Scholar on the free web-service tier.
+#
+# What the free tier is, and what each setting below answers:
+#   512 MB RAM, 0.1 CPU   -> int8 ONNX models run one input at a time, no
+#                            cross-encoder reranker, one indexing job at a time,
+#                            upload/page/passage caps, a 2-workspace index cache.
+#                            Measured: 386 MiB peak, /ask p50 0.45 s.
+#   no persistent disk    -> Postgres on Neon, files and indexes in Supabase
+#                            Storage; the local disk is only a disposable cache
+#   sleeps after 15 min   -> uploads index in the background while the page
+#                            polls (the UI asks the user to keep the tab open);
+#                            a job cut off by sleep is marked failed on wake
+#   SMTP 25/465/587 shut  -> send mail on port 2525
+# The numbers behind the caps are in docs/deploy-measurements/.
+#
+# Secrets are `sync: false`: Render asks for them when the Blueprint is first
+# applied and never reads them from this file.
+#
+# REQUIRED alongside this: the Supabase keep-alive workflow
+# (.github/workflows/keepalive.yml). A free Supabase project is paused after a
+# week without activity, and a paused project means every question fails until
+# someone un-pauses it by hand.
+services:
+  - type: web
+    name: scholar
+    runtime: docker
+    plan: free
+    # Same AWS region as the Neon and Supabase projects (us-east-1). Every
+    # question makes several round trips to both; cross-country latency would
+    # be paid on each one.
+    region: virginia
+    dockerfilePath: ./Dockerfile
+    # Process liveness only. /healthz runs SELECT 1, and a health check that
+    # hits Neon every few seconds would keep it from ever scaling to zero —
+    # spending the free plan's compute hours on health checks.
+    healthCheckPath: /livez
+    autoDeploy: true
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+
+      # ——— storage: nothing may live on the instance's own disk ———
+      - key: DATABASE_URL
+        sync: false      # postgresql+psycopg://USER:PASS@ep-xxx.us-east-1.aws.neon.tech/scholar?sslmode=require  (direct, not -pooler)
+      - key: STORAGE_BACKEND
+        value: supabase
+      - key: SUPABASE_URL
+        sync: false      # https://<project-ref>.supabase.co
+      - key: SUPABASE_SERVICE_KEY
+        sync: false      # service_role key — server-side only
+      - key: SUPABASE_BUCKET
+        value: scholar   # create it PRIVATE in the Supabase dashboard
+
+      # ——— generation: hosted, so it costs no local memory ———
+      - key: LLM_PROVIDER
+        value: hosted
+      - key: LLM_BASE_URL
+        value: https://api.groq.com/openai/v1
+      - key: LLM_MODEL
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
+
+      # ——— web ———
+      # The SPA and the API share one origin, so SameSite=Lax is enough and
+      # safer than None.
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: COOKIE_SAMESITE
+        value: lax
+      - key: FRONTEND_ORIGIN
+        sync: false      # https://<service-name>.onrender.com
+      - key: PUBLIC_APP_URL
+        sync: false      # same as FRONTEND_ORIGIN unless a custom domain is added
+
+      # ——— fitting 512 MB and 0.1 CPU ———
+      - key: MODEL_PRECISION
+        value: int8      # fp32 mpnet alone is 436 MB
+      # The reranker is OFF here, deliberately and measurably: at 0.1 CPU the
+      # cross-encoder alone makes a question take ~30 s (it needs ~1.4 s of
+      # CPU per question), and every cheaper way of running it lost more
+      # retrieval quality than turning it off. The cost, on the eval: hit@5
+      # 94.1% -> 92.2%, MRR 0.835 -> 0.772. On any instance with >= 1 GB and a
+      # whole CPU, set this to "true" to get the full pipeline back — nothing
+      # else changes.
+      - key: RERANK_ENABLED
+        value: "false"
+      - key: MAX_UPLOAD_MB
+        value: "10"
+      # Indexing runs at ~5 s of CPU per passage at 0.1 CPU (measured), and a
+      # job must finish inside the 15-minute idle window even if the user closes
+      # the tab. 60 passages ~ 5 min; the page cap refuses a large PDF before
+      # parsing it. See docs/deploy-measurements/README.md.
+      - key: MAX_PAGES
+        value: "30"
+      - key: MAX_CHUNKS_PER_DOC
+        value: "60"      # ~5 min at 0.1 CPU
+      - key: RETRIEVER_CACHE_SIZE
+        value: "2"
+      - key: EMBED_BATCH_SIZE
+        value: "1"       # measured fastest and lightest on one thread
+      - key: INDEX_IN_BACKGROUND
+        value: "true"
+      - key: OCR_ENABLED
+        value: "false"   # 300-dpi page renders at 0.1 CPU blow both the RAM and the time budget
+      - key: MALLOC_ARENA_MAX
+        value: "2"
+
+      # ——— email: Render free blocks outbound 25/465/587 ———
+      # Without SMTP_HOST, reset and invitation tokens go to the LOG instead —
+      # an account-takeover risk for anyone who can read the logs. Use a
+      # provider that accepts submission on 2525 (Brevo, Mailgun, SendGrid).
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "2525"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: MAIL_FROM
+        sync: false

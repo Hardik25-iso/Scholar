@@ -240,8 +240,8 @@ def get_current_user(
 
 
 def require_csrf(
-    csrf_token: str | None = Cookie(default=None),
-    x_csrf_token: str | None = Header(default=None),
+    csrf_token: str | None = Cookie(default=None, alias=CSRF_COOKIE),
+    x_csrf_token: str | None = Header(default=None, alias=CSRF_HEADER),
 ) -> None:
     """Dependency for unsafe routes: header must match the CSRF cookie."""
     if not csrf_token or not x_csrf_token or not secrets.compare_digest(csrf_token, x_csrf_token):

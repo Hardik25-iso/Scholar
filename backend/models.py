@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, EmailStr, computed_field, field_validator
 
+from backend.db_models import ROLES
+
 
 # What one entry in a document's page list actually IS, per format. Only PDF has
 # real pages; labelling a slide or a worksheet "page 3" is a small lie, and this
@@ -220,8 +222,8 @@ class InviteRequest(BaseModel):
     @field_validator("role")
     @classmethod
     def role_rules(cls, v: str) -> str:
-        if v not in ("owner", "member"):
-            raise ValueError("role must be 'owner' or 'member'")
+        if v not in ROLES:
+            raise ValueError(f"role must be one of {', '.join(ROLES)}")
         return v
 
 

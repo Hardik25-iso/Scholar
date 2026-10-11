@@ -69,6 +69,7 @@ free hosted endpoint — both are shown below, and retrieval and the eval harnes
 git clone https://github.com/Hardik25-iso/Scholar.git && cd Scholar
 python -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+python scripts/fetch_models.py      # the ONNX models (~135 MB), pinned and checksummed
 cp .env.example .env
 ```
 
@@ -279,9 +280,10 @@ cd frontend && npm run build
 
 A [`Dockerfile`](Dockerfile) builds one image serving the API and the built frontend from a single
 origin — which also makes the auth cookie same-site in production, so the cross-origin cookie
-handling that development needs disappears once deployed. The embedding, tokenizer and reranker
-models are baked in at build time; without that, the first question after every deploy downloads
-~500 MB inside the request and a cold container looks broken for minutes.
+handling that development needs disappears once deployed. There is no torch in the image: both
+models run on ONNX Runtime from int8 files baked in at build time (pinned and checksummed by
+`scripts/fetch_models.py`), so the image is 1.0 GB instead of 2.3 GB and nothing downloads on a
+cold start.
 
 ```bash
 docker build -t scholar . && docker run -p 8001:8001 --env-file .env -v scholar-data:/data scholar
@@ -310,6 +312,44 @@ Sessions use short-lived access tokens with rotating, revocable refresh tokens: 
 refresh token is treated as theft and revokes every session for that account.
 
 See [`.env.example`](.env.example) for every setting.
+
+### Render's free tier
+
+[`render.yaml`](render.yaml) deploys Scholar to a free web service: 512 MB RAM, 0.1 CPU, no
+persistent disk, and it sleeps after 15 minutes idle. Measured under exactly those limits
+([`docs/deploy-measurements/`](docs/deploy-measurements/README.md)): peak memory 386 MiB, `/ask`
+p50 0.45 s, a 15-page paper indexed in about 3 minutes.
+
+It fits by trading **one measured piece of quality**. At 0.1 CPU the cross-encoder reranker makes
+a question take about 30 seconds, so it is off (`RERANK_ENABLED=false`): hit@5 94.1% → 92.2%, MRR
+0.835 → 0.772. On any instance with ≥ 1 GB and a whole CPU, set it back to `true`. Nothing else
+changes.
+
+What the free tier needs alongside it, all free:
+
+1. **[Neon](https://neon.com) Postgres** for `DATABASE_URL`. Use the *direct* endpoint (not
+   `-pooler`) and `postgresql+psycopg://…?sslmode=require`. Render's own free Postgres expires
+   after 30 days.
+2. **[Supabase](https://supabase.com) Storage** for documents and indexes. Create a **private**
+   bucket named `scholar` and set `SUPABASE_URL` / `SUPABASE_SERVICE_KEY`. An index is never
+   edited in place: each change uploads a complete new version, and the database switches to it
+   in one transaction, so a crash mid-upload changes nothing.
+3. **The keep-alive workflow — required, not optional.** A free Supabase project is *paused*
+   after a week without activity, and then every question fails until someone un-pauses it by
+   hand. [`.github/workflows/keepalive.yml`](.github/workflows/keepalive.yml) touches it every
+   three days. Add `SUPABASE_URL` and `SUPABASE_SERVICE_KEY` as repository secrets, run it once by
+   hand from the Actions tab, and don't ignore its failure emails. GitHub disables scheduled
+   workflows in a public repo after 60 days with no commits, so re-enable it if the repo goes
+   quiet.
+4. **Mail on port 2525.** Render's free tier blocks outbound 25, 465 and 587.
+
+Limits a free deployment has, by design:
+- Documents up to 30 pages / 60 passages (about 5 minutes of indexing at 0.1 CPU).
+- Uploads index in the background. The page asks the user to keep the tab open, because its
+  polling is what keeps an idle-sleeping server awake. A job cut off by a restart is marked
+  failed with a reason, never left "indexing…" forever.
+- The first question after the server wakes takes a few seconds longer while it reloads the
+  index.
 
 ### Before you serve strangers
 

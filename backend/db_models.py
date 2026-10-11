@@ -269,3 +269,31 @@ class AnswerLog(SQLModel, table=True):
     # Fingerprint of the index state this answer was retrieved from.
     index_fingerprint: str = Field(default="", index=True)
     n_chunks_indexed: int = 0
+
+
+class WorkspaceIndex(SQLModel, table=True):
+    """Which version of a workspace's index is the current one.
+
+    The index files (FAISS, chunk metadata, FTS5) are written as an IMMUTABLE
+    set under a fresh version prefix, and become live only when this row is
+    switched to point at them. That switch is a single row update inside a
+    transaction, which is the one atomic operation available: object storage
+    offers no compare-and-swap, so "which files are current" cannot be decided
+    by the files themselves without readers sometimes seeing half of a write.
+
+    A write that dies part-way leaves unreferenced objects and this row
+    untouched — every reader still sees the complete previous version. The
+    orphans are swept by the next successful write.
+
+    `fingerprint` is the same value audit.index_fingerprint() computes from
+    chunks.json, kept here so "has this library changed since that answer?"
+    is a row read rather than a download.
+    """
+
+    workspace_id: int = Field(primary_key=True, foreign_key="workspace.id")
+    # "" means the pre-versioning layout (files directly under index/), adopted
+    # in place for a library that existed before this table did.
+    version: str = ""
+    fingerprint: str = ""
+    n_chunks: int = 0
+    updated_at: datetime = Field(default_factory=_utcnow)

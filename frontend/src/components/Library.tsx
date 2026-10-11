@@ -1,5 +1,5 @@
-import { useRef } from "react";
-import type { IndexJob, Paper } from "../api";
+import { useEffect, useRef, useState } from "react";
+import { getUploadLimits, type IndexJob, type Paper, type UploadLimits } from "../api";
 import { FileIcon, TrashIcon, UploadIcon } from "./icons";
 import WorkspaceSwitcher from "./WorkspaceSwitcher";
 
@@ -34,6 +34,15 @@ export default function Library({
 }: Props) {
   const busy = job !== null;
   const fileRef = useRef<HTMLInputElement>(null);
+  // The server's real limits, not a copy of them. Until they load (or if the
+  // request fails) the hint simply omits them rather than guessing.
+  const [limits, setLimits] = useState<UploadLimits | null>(null);
+  useEffect(() => {
+    getUploadLimits().then(setLimits).catch(() => setLimits(null));
+  }, []);
+  const limitHint = limits
+    ? ` — max ${limits.max_upload_mb} MB` + (limits.max_pages ? `, ${limits.max_pages} pages` : "")
+    : "";
 
   const pick = () => fileRef.current?.click();
   const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -80,7 +89,7 @@ export default function Library({
         <UploadIcon className="mx-auto mb-2 h-[1.6rem] w-[1.6rem] text-accent" />
         <b className="block font-sans text-[0.82rem] font-semibold">Drop a document to add it</b>
         <span className="mt-0.5 block font-mono text-[0.6rem] tracking-[0.04em] text-faint">
-          pdf · docx · pptx · xlsx · txt · md — max 20 MB
+          pdf · docx · pptx · xlsx · txt · md{limitHint}
         </span>
       </button>
       {error && <p className="mx-4 mt-2 font-mono text-[0.62rem] leading-relaxed text-accent">{error}</p>}
@@ -106,6 +115,17 @@ export default function Library({
                 <span className={`block h-full rounded-sm bg-gradient-to-r from-accent to-[#C7614F]
                                   ${job.status === "queued" ? "w-1/5 opacity-60" : "w-3/5 animate-pulse"}`} />
               </div>
+              {/* When this server does the indexing itself (no queue), the job
+                  lives only as long as the process — and a free host puts an
+                  idle server to sleep. This page's status polling is the
+                  traffic that keeps it awake, so the honest instruction is to
+                  keep the page open, not to wait patiently elsewhere. */}
+              {job.ran_inline && (job.status === "queued" || job.status === "running") && (
+                <p className="mt-[0.45rem] font-mono text-[0.6rem] leading-relaxed text-graphite">
+                  Keep this tab open until indexing finishes — the free server sleeps
+                  when nothing is talking to it, and that would stop the job.
+                </p>
+              )}
             </div>
           </div>
         )}

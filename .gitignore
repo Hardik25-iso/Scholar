@@ -1,5 +1,6 @@
 # Python
 .venv/
+.venv-*/
 __pycache__/
 *.pyc
 
@@ -42,3 +43,7 @@ backups/
 # study guide — it exists on disk and should stay there, but it is not part of
 # what this repository publishes.
 docs/INTERVIEW-PREP*.md
+
+# ONNX models fetched by scripts/fetch_models.py — pinned and checksummed,
+# re-downloadable, and far too large for git.
+models/

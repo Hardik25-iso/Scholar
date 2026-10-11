@@ -14,9 +14,10 @@ Three tiers, cheapest first:
             text: embedding cosine 0.84 worst / 0.91 median, cross-encoder rank
             correlation 0.86 worst / 0.94 mean. Yet the full pipeline lost
             nothing on the eval (hit@5 94.1% -> 94.1%, MRR 0.822 -> 0.835, no
-            question flipped; docs/deploy-measurements/eval-int8-batch1.*). So these bars only catch a BROKEN port
-            (wrong pooling or padding lands near 0.3); whether drift costs
-            retrieval quality is the eval's question, and it answered it.
+            question flipped; docs/deploy-measurements/eval-int8-batch1.json).
+            So these bars only catch a BROKEN port (wrong pooling or padding
+            lands near 0.3); whether drift costs retrieval quality is the
+            eval's question, and it answered it.
   fp32      the unquantised export (`slow`, skipped unless fetched with
             --precision fp32). Must match torch to float tolerance — this is
             what proves the pre/post-processing is right, independent of

@@ -1,8 +1,22 @@
 # Deploy measurements: Scholar on a 512 MB / 0.1 CPU instance
 
-Every limit in [`render.yaml`](../../render.yaml) is set from a number in this directory. Raw
-outputs sit beside this file: `eval-*.json|txt` from `python -m backend.eval --json-out`, and
-`probe-*.json` from [`scripts/rss_probe.py`](../../scripts/rss_probe.py).
+Every limit in [`render.yaml`](../../render.yaml) is set from a number in this directory.
+
+The raw results kept here back the headline claims:
+
+| File | What it is |
+|---|---|
+| `eval-A-torch.json` | quality baseline: the torch pipeline before this change |
+| `eval-int8-batch1.json` | quality of what ships with the reranker on (no question lost) |
+| `eval-int8-norerank.json` | quality of the free-tier configuration (reranker off) |
+| `probe-torch-baseline-2g-1cpu.json` | memory and latency before: the torch image |
+| `probe-onnx-int8-free-norerank.json` | memory and latency after, under 512 MB / 0.1 CPU |
+
+The other rows in the tables below (fp32, the rerank-lever variants, and the intermediate probe
+runs that got OOM-killed) were measured the same way and are summarised here rather than kept as
+files. To reproduce any of them, run the commands below with the flags that row names:
+`--candidates`, `--rerank-max-tokens`, `--no-rerank`, `MODEL_PRECISION=fp32`, or the probe's
+`--memory` / `--cpus` / `--env`.
 
 ## How it was measured
 

@@ -88,6 +88,11 @@ jobs:
           python-version: "3.12"
           cache: pip
 
+      # Same as the SQLite job: without the binary the OCR tests skip, and this
+      # job would quietly cover less than the one it mirrors.
+      - name: Install Tesseract
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
